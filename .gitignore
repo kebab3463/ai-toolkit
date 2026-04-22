@@ -184,7 +184,8 @@ cython_debug/
 aitk_db.db
 /notes.md
 /data
-.claude.envrc
+.claude/
+.envrc
 /SageAttention/
 qwen_autocaption_prompt.md
 scratchwork.ipynb
