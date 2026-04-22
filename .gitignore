@@ -196,7 +196,7 @@ testing/.model_test_outputs
 testing/.engine_test_outputs
 testing/.*
 /issue_review
-.claude.envrc
+.envrc
 /SageAttention/
 qwen_autocaption_prompt.md
 scratchwork.ipynb
