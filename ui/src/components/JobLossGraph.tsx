@@ -76,6 +76,15 @@ function strokeForKey(key: string) {
   return PALETTE[hashToIndex(key, PALETTE.length)];
 }
 
+/** Plot area alignment: same left Y width + right gutter on every chart so step x-lines line up vertically. */
+function chartMargins(showLrOnMain: boolean) {
+  const right = showLrOnMain ? 52 : 16;
+  return { top: 10, right, bottom: 10, left: 8 } as const;
+}
+
+const CHART_Y_AXIS_WIDTH = 72;
+const CHART_PLOT_LEFT_PX = 8 + CHART_Y_AXIS_WIDTH;
+
 // Returns a solid but duller/darker version of an rgba color string for the trend overlay.
 function dulledColor(rgba: string): string {
   const m = rgba.match(/rgba?\((\d+),(\d+),(\d+)/);
@@ -278,7 +287,7 @@ export default function JobLossGraph({ job }: Props) {
     return out;
   }, [series, activeKeys, smoothing, plotStride, windowSize, useLogScale]);
 
-  const chartData = useMemo(() => {
+  const chartDataLossOnly = useMemo(() => {
     // Merge series into one array of objects keyed by step.
     // Fields: `${key}__raw` and `${key}__smooth`
     const map = new Map<number, any>();
@@ -309,6 +318,20 @@ export default function JobLossGraph({ job }: Props) {
     return arr;
   }, [activeKeys, perSeries]);
 
+  const lrByStepDownsampled = useMemo(() => {
+    if (!showAuxLr) return new Map<number, number>();
+    const pts = downsampleAuxPoints(series['learning_rate'] ?? [], plotStride);
+    return new Map(pts.map(p => [p.step, p.value]));
+  }, [showAuxLr, series, plotStride]);
+
+  const chartData = useMemo(() => {
+    if (!showAuxLr) return chartDataLossOnly;
+    return chartDataLossOnly.map(row => ({
+      ...row,
+      learning_rate: lrByStepDownsampled.has(row.step) ? lrByStepDownsampled.get(row.step)! : null,
+    }));
+  }, [chartDataLossOnly, showAuxLr, lrByStepDownsampled]);
+
   // Zoomed slice of chartData
   const visibleData = useMemo(() => {
     if (zoomLeft == null || zoomRight == null) return chartData;
@@ -317,18 +340,39 @@ export default function JobLossGraph({ job }: Props) {
     return chartData.filter(d => d.step >= lo && d.step <= hi);
   }, [chartData, zoomLeft, zoomRight]);
 
+  const syncMargins = chartMargins(showAuxLr);
+
+  const lrYDomain = useMemo((): [number, number] => {
+    if (!showAuxLr) return [0, 1];
+    const vals = visibleData
+      .map(d => d.learning_rate)
+      .filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+    if (vals.length === 0) return [0, 1];
+    let lo = Math.min(...vals);
+    let hi = Math.max(...vals);
+    if (lo === hi) {
+      const eps = Math.abs(lo) * 1e-6 || 1e-12;
+      lo -= eps;
+      hi += eps;
+    }
+    return [lo, hi];
+  }, [showAuxLr, visibleData]);
+
+  const hasLrInView =
+    showAuxLr && visibleData.some(d => typeof d.learning_rate === 'number' && Number.isFinite(d.learning_rate));
+
   // Convert a pixel x within the wrapper to a fractional position [0,1] across the plot area
   const pxToFraction = useCallback((clientX: number) => {
     const wrapper = chartWrapperRef.current;
     if (!wrapper) return 0;
     const rect = wrapper.getBoundingClientRect();
-    // chart margin left (8) + yAxis width (72) = 80, margin right = 16
-    const plotLeft = 80;
-    const plotRight = rect.width - 16;
+    const m = chartMargins(showAuxLr);
+    const plotLeft = CHART_PLOT_LEFT_PX;
+    const plotRight = rect.width - m.right;
     const plotWidth = plotRight - plotLeft;
     const localX = clientX - rect.left;
     return Math.max(0, Math.min(1, (localX - plotLeft) / plotWidth));
-  }, []);
+  }, [showAuxLr]);
 
   const fractionToStep = useCallback((frac: number) => {
     const data = visibleData;
@@ -352,8 +396,9 @@ export default function JobLossGraph({ job }: Props) {
     const onMove = (e: MouseEvent) => {
       if (selectStartPx.current == null) return;
       const rect = wrapper.getBoundingClientRect();
-      const plotLeft = 80;
-      const plotRight = rect.width - 16;
+      const m = chartMargins(showAuxLr);
+      const plotLeft = CHART_PLOT_LEFT_PX;
+      const plotRight = rect.width - m.right;
       const startLocal = selectStartPx.current - rect.left;
       const curLocal = e.clientX - rect.left;
       // Clamp to plot area
@@ -390,7 +435,7 @@ export default function JobLossGraph({ job }: Props) {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
     };
-  }, [pxToFraction, fractionToStep]);
+  }, [pxToFraction, fractionToStep, showAuxLr]);
 
   const handleResetZoom = useCallback(() => {
     setZoomLeft(null);
@@ -402,7 +447,7 @@ export default function JobLossGraph({ job }: Props) {
 
   const auxChartsToShow = useMemo(() => {
     const base = AUX_METRIC_OPTIONS.filter(opt => {
-      if (opt.key === 'learning_rate') return showAuxLr;
+      if (opt.key === 'learning_rate') return false;
       if (opt.key === 'weight_decay') return showAuxWd;
       if (opt.key === 'grad_norm_pre') return showAuxGradPre;
       if (opt.key === 'grad_norm_post') return showAuxGradPost;
@@ -410,7 +455,7 @@ export default function JobLossGraph({ job }: Props) {
     });
     const agg = showGradAgg ? [...GRAD_AGG_METRIC_OPTIONS] : [];
     return [...base, ...agg];
-  }, [showAuxLr, showAuxWd, showAuxGradPre, showAuxGradPost, showGradAgg]);
+  }, [showAuxWd, showAuxGradPre, showAuxGradPost, showGradAgg]);
 
   const gradNormPairs = useMemo(
     () => alignGradNormPairs(series['grad_norm_pre'] ?? [], series['grad_norm_post'] ?? []),
@@ -468,12 +513,13 @@ export default function JobLossGraph({ job }: Props) {
         </button>
       </div>
 
-      {/* Loss: single chart, single y-axis (loss only) */}
+      {/* Loss chart; optional learning rate on a hidden-scale right axis */}
       <div className="px-4 pt-4">
         <div className="mb-3">
           <h3 className="text-xs font-medium text-gray-200 uppercase tracking-wide">Loss</h3>
           <p className="text-[11px] text-gray-500 mt-1">
-            Log Y, smoothing, and outlier clipping apply only here. Learning rate and other scalars are never combined on this axis.
+            Log Y, smoothing, and outlier clipping apply to loss only. When enabled below, learning rate is drawn on the same
+            chart with its own y-scale (min–max in view; no tick labels). Hover the curve for the exact value.
           </p>
         </div>
         <div ref={chartWrapperRef} className="bg-gray-950 rounded-lg border border-gray-800 h-96 relative select-none">
@@ -498,10 +544,7 @@ export default function JobLossGraph({ job }: Props) {
               </button>
             )}
             <ResponsiveContainer width="100%" height="100%" style={isDragging ? { pointerEvents: 'none' } : undefined}>
-              <LineChart
-                data={visibleData}
-                margin={{ top: 10, right: 16, bottom: 10, left: 8 }}
-              >
+              <LineChart data={visibleData} margin={syncMargins}>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
                 <XAxis
                   dataKey="step"
@@ -511,15 +554,28 @@ export default function JobLossGraph({ job }: Props) {
                   minTickGap={40}
                 />
                 <YAxis
+                  yAxisId="loss"
                   scale={useLogScale ? 'log' : 'linear'}
                   tick={{ fill: 'rgba(255,255,255,0.55)', fontSize: 12 }}
                   tickLine={{ stroke: 'rgba(255,255,255,0.15)' }}
                   axisLine={{ stroke: 'rgba(255,255,255,0.15)' }}
-                  width={72}
+                  width={CHART_Y_AXIS_WIDTH}
                   tickFormatter={formatNum}
                   domain={yDomain}
                   allowDataOverflow={clipOutliers}
                 />
+                {showAuxLr && hasLrInView && (
+                  <YAxis
+                    yAxisId="lr"
+                    orientation="right"
+                    domain={lrYDomain}
+                    tick={false}
+                    axisLine={false}
+                    tickLine={false}
+                    width={8}
+                    allowDataOverflow
+                  />
+                )}
                 {!isDragging && (
                   <Tooltip
                     cursor={{ stroke: 'rgba(59,130,246,0.25)', strokeWidth: 1 }}
@@ -532,7 +588,13 @@ export default function JobLossGraph({ job }: Props) {
                     }}
                     labelStyle={{ color: 'rgba(255,255,255,0.75)' }}
                     labelFormatter={(label: any) => `step ${label}`}
-                    formatter={(value: any, name: any) => [formatNum(Number(value)), name]}
+                    formatter={(value: any, name: any) => {
+                      const n = String(name);
+                      if (n === 'Learning rate' || n.includes('learning_rate')) {
+                        return [formatAuxTooltipValue('learning_rate', Number(value)), 'Learning rate'];
+                      }
+                      return [formatNum(Number(value)), name];
+                    }}
                   />
                 )}
 
@@ -548,6 +610,7 @@ export default function JobLossGraph({ job }: Props) {
                 {showRaw && activeKeys.map(k => (
                   <Line
                     key={`${k}__raw`}
+                    yAxisId="loss"
                     type="monotone"
                     dataKey={`${k}__raw`}
                     name={`${k} (raw)`}
@@ -561,6 +624,7 @@ export default function JobLossGraph({ job }: Props) {
                 {showSmoothed && activeKeys.map(k => (
                   <Line
                     key={`${k}__smooth`}
+                    yAxisId="loss"
                     type="monotone"
                     dataKey={`${k}__smooth`}
                     name={`${k}`}
@@ -570,10 +634,11 @@ export default function JobLossGraph({ job }: Props) {
                     isAnimationActive={false}
                   />
                 ))}
-                {/* Full-smooth trend overlay — rendered last so it's on top, hidden from legend/tooltip */}
+                {/* Full-smooth trend overlay — hidden from legend/tooltip */}
                 {activeKeys.map(k => (
                   <Line
                     key={`${k}__fullsmooth`}
+                    yAxisId="loss"
                     type="monotone"
                     dataKey={`${k}__fullsmooth`}
                     name={`${k}__fullsmooth`}
@@ -585,6 +650,19 @@ export default function JobLossGraph({ job }: Props) {
                     tooltipType="none"
                   />
                 ))}
+                {showAuxLr && hasLrInView && (
+                  <Line
+                    yAxisId="lr"
+                    type="monotone"
+                    dataKey="learning_rate"
+                    name="Learning rate"
+                    stroke="rgba(251,191,36,0.38)"
+                    strokeWidth={1.75}
+                    dot={false}
+                    connectNulls={false}
+                    isAnimationActive={false}
+                  />
+                )}
 
               </LineChart>
             </ResponsiveContainer>
@@ -593,11 +671,12 @@ export default function JobLossGraph({ job }: Props) {
         </div>
       </div>
 
-      {/* Training scalars: one LineChart per metric, each with its own y-scale */}
+      {/* Training scalars (except LR): same plot width as loss for aligned step x */}
       <div className="px-4 pb-4 mt-6 pt-6 border-t border-gray-800">
         <h3 className="text-xs font-medium text-gray-200 uppercase tracking-wide">Training metrics</h3>
         <p className="text-[11px] text-gray-500 mt-1 mb-3">
-          Each metric is plotted alone on its own chart with a dedicated y-axis (scales are not shared with loss or with each other).
+          Each metric has its own y-axis (not shared with loss or with each other). Margins match the loss chart so a vertical
+          line keeps the same training step. Use the Learning rate checkbox to overlay LR on the loss chart above.
         </p>
         <div className="flex flex-wrap gap-x-5 gap-y-2 mb-1">
           <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer select-none">
@@ -667,25 +746,34 @@ export default function JobLossGraph({ job }: Props) {
               className="max-w-xs mb-3"
             />
             {gradChunkChartData.length === 0 ? null : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 gap-3">
                 <div className="h-40 flex flex-col border border-gray-800 rounded-md overflow-hidden bg-gray-900/40">
                   <div className="text-[10px] text-gray-500 px-2 py-1 border-b border-gray-800 shrink-0">
                     Mean pre-clip norm per chunk
                   </div>
                   <div className="flex-1 min-h-0">
                     <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={gradChunkChartData} margin={{ top: 4, right: 8, left: 4, bottom: 4 }}>
+                      <BarChart data={gradChunkChartData} margin={syncMargins}>
                         <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
                         <XAxis dataKey="chunk" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }} />
-                        <YAxis tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }} width={56} />
+                        <YAxis
+                          tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }}
+                          width={CHART_Y_AXIS_WIDTH}
+                        />
                         <Tooltip
                           contentStyle={{ background: 'rgba(17,24,39,0.96)', border: '1px solid #374151', fontSize: 11 }}
-                          formatter={(v: number) => [formatNum(v), 'mean']}
-                          labelFormatter={(label, payload: any[]) =>
-                            payload?.[0]?.payload
-                              ? `steps ${payload[0].payload.stepStart}–${payload[0].payload.stepEnd}`
-                              : `chunk ${label}`
-                          }
+                          formatter={(v: number | undefined) => [
+                            typeof v === 'number' && Number.isFinite(v) ? formatNum(v) : '',
+                            'mean',
+                          ]}
+                          labelFormatter={(label, payload) => {
+                            const row = payload?.[0]?.payload as
+                              | { stepStart?: number; stepEnd?: number }
+                              | undefined;
+                            return row?.stepStart != null && row?.stepEnd != null
+                              ? `steps ${row.stepStart}–${row.stepEnd}`
+                              : `chunk ${label}`;
+                          }}
                         />
                         <Bar dataKey="meanPre" fill="rgba(167,139,250,0.85)" />
                       </BarChart>
@@ -698,18 +786,28 @@ export default function JobLossGraph({ job }: Props) {
                   </div>
                   <div className="flex-1 min-h-0">
                     <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={gradChunkChartData} margin={{ top: 4, right: 8, left: 4, bottom: 4 }}>
+                      <BarChart data={gradChunkChartData} margin={syncMargins}>
                         <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
                         <XAxis dataKey="chunk" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }} />
-                        <YAxis tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }} width={40} domain={[0, 100]} />
+                        <YAxis
+                          tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }}
+                          width={CHART_Y_AXIS_WIDTH}
+                          domain={[0, 100]}
+                        />
                         <Tooltip
                           contentStyle={{ background: 'rgba(17,24,39,0.96)', border: '1px solid #374151', fontSize: 11 }}
-                          formatter={(v: number) => [`${v.toFixed(2)}%`, 'clipped']}
-                          labelFormatter={(label, payload: any[]) =>
-                            payload?.[0]?.payload
-                              ? `steps ${payload[0].payload.stepStart}–${payload[0].payload.stepEnd}`
-                              : `chunk ${label}`
-                          }
+                          formatter={(v: number | undefined) => [
+                            typeof v === 'number' && Number.isFinite(v) ? `${v.toFixed(2)}%` : '',
+                            'clipped',
+                          ]}
+                          labelFormatter={(label, payload) => {
+                            const row = payload?.[0]?.payload as
+                              | { stepStart?: number; stepEnd?: number }
+                              | undefined;
+                            return row?.stepStart != null && row?.stepEnd != null
+                              ? `steps ${row.stepStart}–${row.stepEnd}`
+                              : `chunk ${label}`;
+                          }}
                         />
                         <Bar dataKey="clipPct" fill="rgba(248,113,113,0.85)" />
                       </BarChart>
@@ -722,7 +820,7 @@ export default function JobLossGraph({ job }: Props) {
         )}
 
         {auxChartsToShow.length > 0 && (
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4">
             {auxChartsToShow.map(opt => {
               const pts = downsampleAuxPoints(series[opt.key] ?? [], plotStride);
               const hasAux = pts.length > 0;
@@ -742,7 +840,7 @@ export default function JobLossGraph({ job }: Props) {
                       </div>
                     ) : (
                       <ResponsiveContainer width="100%" height="100%">
-                        <LineChart data={pts} margin={{ top: 8, right: 12, bottom: 8, left: 4 }}>
+                        <LineChart data={pts} margin={syncMargins}>
                           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
                           <XAxis
                             dataKey="step"
@@ -755,7 +853,7 @@ export default function JobLossGraph({ job }: Props) {
                             tick={{ fill: 'rgba(255,255,255,0.45)', fontSize: 11 }}
                             tickLine={{ stroke: 'rgba(255,255,255,0.12)' }}
                             axisLine={{ stroke: 'rgba(255,255,255,0.12)' }}
-                            width={76}
+                            width={CHART_Y_AXIS_WIDTH}
                             tickFormatter={v => formatAuxTooltipValue(opt.key, Number(v))}
                             domain={['auto', 'auto']}
                           />
@@ -768,7 +866,10 @@ export default function JobLossGraph({ job }: Props) {
                               fontSize: 12,
                             }}
                             labelFormatter={(step: number) => `step ${step}`}
-                            formatter={(value: number) => [formatAuxTooltipValue(opt.key, Number(value)), opt.label]}
+                            formatter={(value: number | undefined) => [
+                              formatAuxTooltipValue(opt.key, Number(value ?? NaN)),
+                              opt.label,
+                            ]}
                           />
                           <Line
                             type="monotone"

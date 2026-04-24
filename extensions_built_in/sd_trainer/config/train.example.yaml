@@ -62,6 +62,7 @@ config:
         #     lr_scheduler: "linear"
         #     lr_scheduler_params:
         #       start_factor: 0.1
+        #       end_factor: 0.0   # final LR = train.lr * end_factor (total_iters usually = train.steps)
         #   - name: cosine_decay
         #     steps: 2500
         #     optimizer_params:

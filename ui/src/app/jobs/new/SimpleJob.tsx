@@ -701,6 +701,26 @@ export default function SimpleJob({
                     min={1}
                   />
                 )}
+                {jobConfig.config.process[0].train.lr_scheduler === 'linear' && (
+                  <NumberInput
+                    label="End learning rate"
+                    className="pt-2"
+                    value={
+                      (Number(jobConfig.config.process[0].train.lr) || 0) *
+                      (Number.isFinite(Number(jobConfig.config.process[0].train.lr_scheduler_params?.end_factor))
+                        ? Number(jobConfig.config.process[0].train.lr_scheduler_params?.end_factor)
+                        : 0)
+                    }
+                    onChange={value => {
+                      const base = Number(jobConfig.config.process[0].train.lr) || 1e-12;
+                      const endLr = Math.max(0, Number(value) || 0);
+                      const factor = base > 0 ? endLr / base : 0;
+                      setJobConfig(factor, 'config.process[0].train.lr_scheduler_params.end_factor');
+                    }}
+                    placeholder="eg. 0"
+                    min={0}
+                  />
+                )}
                 <TextAreaInput
                   label="Advanced Scheduler Params (JSON)"
                   className="pt-2"
@@ -1076,6 +1096,28 @@ export default function SimpleJob({
                             setJobConfig(value, `config.process[0].train.stages[${i}].lr_scheduler_params.T_0`)
                           }
                           min={1}
+                        />
+                      )}
+                      {stage.lr_scheduler === 'linear' && (
+                        <NumberInput
+                          label="Stage end learning rate"
+                          value={
+                            (Number(stage.lr ?? jobConfig.config.process[0].train.lr) || 0) *
+                            (Number.isFinite(Number(stage.lr_scheduler_params?.end_factor))
+                              ? Number(stage.lr_scheduler_params?.end_factor)
+                              : 0)
+                          }
+                          onChange={value => {
+                            const base = Number(stage.lr ?? jobConfig.config.process[0].train.lr) || 1e-12;
+                            const endLr = Math.max(0, Number(value) || 0);
+                            const factor = base > 0 ? endLr / base : 0;
+                            setJobConfig(
+                              factor,
+                              `config.process[0].train.stages[${i}].lr_scheduler_params.end_factor`,
+                            );
+                          }}
+                          placeholder="eg. 0"
+                          min={0}
                         />
                       )}
                       <TextAreaInput
