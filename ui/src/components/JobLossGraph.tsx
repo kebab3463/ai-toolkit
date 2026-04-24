@@ -74,8 +74,48 @@ function dulledColor(rgba: string): string {
   return `rgba(${r},${g},${b},1)`;
 }
 
+/** Optional training scalars stored in loss_log.db (see BaseSDTrainProcess / SDTrainer). */
+const AUX_METRIC_OPTIONS = [
+  { key: 'learning_rate', label: 'Learning rate', color: 'rgba(251,191,36,1)' },
+  { key: 'weight_decay', label: 'Weight decay', color: 'rgba(52,211,153,1)' },
+  { key: 'grad_norm_pre', label: 'Grad norm (before clip)', color: 'rgba(167,139,250,1)' },
+  { key: 'grad_norm_post', label: 'Grad norm (after clip)', color: 'rgba(96,165,250,1)' },
+] as const;
+
+function formatAuxTooltipValue(key: string, v: number) {
+  if (!Number.isFinite(v)) return '';
+  if (key === 'learning_rate') return v.toExponential(2);
+  if (key === 'weight_decay') return v.toExponential(2);
+  return formatNum(v);
+}
+
+function downsampleAuxPoints(
+  points: LossPoint[],
+  stride: number,
+): { step: number; value: number }[] {
+  const s = Math.max(1, stride | 0);
+  return points
+    .filter(p => p.value !== null && Number.isFinite(p.value as number))
+    .filter((_, i) => i % s === 0)
+    .map(p => ({ step: p.step, value: p.value as number }));
+}
+
 export default function JobLossGraph({ job }: Props) {
-  const { series, lossKeys, status, refreshLoss } = useJobLossLog(job.id, 2000);
+  const [showAuxLr, setShowAuxLr] = useState(false);
+  const [showAuxWd, setShowAuxWd] = useState(false);
+  const [showAuxGradPre, setShowAuxGradPre] = useState(false);
+  const [showAuxGradPost, setShowAuxGradPost] = useState(false);
+
+  const extraMetricKeys = useMemo(() => {
+    const out: string[] = [];
+    if (showAuxLr) out.push('learning_rate');
+    if (showAuxWd) out.push('weight_decay');
+    if (showAuxGradPre) out.push('grad_norm_pre');
+    if (showAuxGradPost) out.push('grad_norm_post');
+    return out;
+  }, [showAuxLr, showAuxWd, showAuxGradPre, showAuxGradPost]);
+
+  const { series, lossKeys, status, refreshLoss } = useJobLossLog(job.id, 2000, extraMetricKeys);
 
   // Controls
   const [useLogScale, setUseLogScale] = useState(false);
@@ -283,6 +323,18 @@ export default function JobLossGraph({ job }: Props) {
   const hasData = chartData.length > 1;
   const isZoomed = zoomLeft != null && zoomRight != null;
 
+  const auxChartsToShow = useMemo(
+    () =>
+      AUX_METRIC_OPTIONS.filter(opt => {
+        if (opt.key === 'learning_rate') return showAuxLr;
+        if (opt.key === 'weight_decay') return showAuxWd;
+        if (opt.key === 'grad_norm_pre') return showAuxGradPre;
+        if (opt.key === 'grad_norm_post') return showAuxGradPost;
+        return false;
+      }),
+    [showAuxLr, showAuxWd, showAuxGradPre, showAuxGradPost],
+  );
+
   const yDomain = useMemo((): [number | 'auto', number | 'auto'] => {
     if (!clipOutliers || chartData.length < 10) return ['auto', 'auto'];
 
@@ -329,8 +381,14 @@ export default function JobLossGraph({ job }: Props) {
         </button>
       </div>
 
-      {/* Chart */}
-      <div className="px-4  pt-4 pb-4">
+      {/* Loss: single chart, single y-axis (loss only) */}
+      <div className="px-4 pt-4">
+        <div className="mb-3">
+          <h3 className="text-xs font-medium text-gray-200 uppercase tracking-wide">Loss</h3>
+          <p className="text-[11px] text-gray-500 mt-1">
+            Log Y, smoothing, and outlier clipping apply only here. Learning rate and other scalars are never combined on this axis.
+          </p>
+        </div>
         <div ref={chartWrapperRef} className="bg-gray-950 rounded-lg border border-gray-800 h-96 relative select-none">
           {/* Drag selection overlay — positioned via refs, no re-renders */}
           <div
@@ -446,6 +504,123 @@ export default function JobLossGraph({ job }: Props) {
             </>
           )}
         </div>
+      </div>
+
+      {/* Training scalars: one LineChart per metric, each with its own y-scale */}
+      <div className="px-4 pb-4 mt-6 pt-6 border-t border-gray-800">
+        <h3 className="text-xs font-medium text-gray-200 uppercase tracking-wide">Training metrics</h3>
+        <p className="text-[11px] text-gray-500 mt-1 mb-3">
+          Each metric is plotted alone on its own chart with a dedicated y-axis (scales are not shared with loss or with each other).
+        </p>
+        <div className="flex flex-wrap gap-x-5 gap-y-2 mb-1">
+          <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              className="rounded border-gray-600 bg-gray-900 text-blue-500 focus:ring-blue-500/40"
+              checked={showAuxLr}
+              onChange={e => setShowAuxLr(e.target.checked)}
+            />
+            Learning rate
+          </label>
+          <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              className="rounded border-gray-600 bg-gray-900 text-blue-500 focus:ring-blue-500/40"
+              checked={showAuxWd}
+              onChange={e => setShowAuxWd(e.target.checked)}
+            />
+            Weight decay
+          </label>
+          <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              className="rounded border-gray-600 bg-gray-900 text-blue-500 focus:ring-blue-500/40"
+              checked={showAuxGradPre}
+              onChange={e => setShowAuxGradPre(e.target.checked)}
+            />
+            Grad norm (before clip)
+          </label>
+          <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              className="rounded border-gray-600 bg-gray-900 text-blue-500 focus:ring-blue-500/40"
+              checked={showAuxGradPost}
+              onChange={e => setShowAuxGradPost(e.target.checked)}
+            />
+            Grad norm (after clip)
+          </label>
+        </div>
+        <p className="text-[11px] text-gray-500 mb-4">
+          Grad norms are logged on optimizer steps only. Weight decay uses the first param group. Older runs may only have learning rate in the database.
+        </p>
+
+        {auxChartsToShow.length > 0 && (
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            {auxChartsToShow.map(opt => {
+              const pts = downsampleAuxPoints(series[opt.key] ?? [], plotStride);
+              const hasAux = pts.length > 1;
+              return (
+                <div
+                  key={opt.key}
+                  className="bg-gray-950 rounded-lg border border-gray-800 overflow-hidden flex flex-col min-h-[220px]"
+                >
+                  <div className="px-3 py-2 border-b border-gray-800 bg-gray-900/80">
+                    <span className="text-xs font-medium text-gray-200">{opt.label}</span>
+                    <span className="block text-[10px] text-gray-500 mt-0.5">Own y-axis · step on x</span>
+                  </div>
+                  <div className="relative flex-1 h-52">
+                    {!hasAux ? (
+                      <div className="h-full w-full flex items-center justify-center text-xs text-gray-500">
+                        {status === 'success' ? 'No data for this metric yet.' : 'Loading…'}
+                      </div>
+                    ) : (
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={pts} margin={{ top: 8, right: 12, bottom: 8, left: 4 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                          <XAxis
+                            dataKey="step"
+                            tick={{ fill: 'rgba(255,255,255,0.45)', fontSize: 11 }}
+                            tickLine={{ stroke: 'rgba(255,255,255,0.12)' }}
+                            axisLine={{ stroke: 'rgba(255,255,255,0.12)' }}
+                            minTickGap={40}
+                          />
+                          <YAxis
+                            tick={{ fill: 'rgba(255,255,255,0.45)', fontSize: 11 }}
+                            tickLine={{ stroke: 'rgba(255,255,255,0.12)' }}
+                            axisLine={{ stroke: 'rgba(255,255,255,0.12)' }}
+                            width={76}
+                            tickFormatter={v => formatAuxTooltipValue(opt.key, Number(v))}
+                            domain={['auto', 'auto']}
+                          />
+                          <Tooltip
+                            contentStyle={{
+                              background: 'rgba(17,24,39,0.96)',
+                              border: '1px solid rgba(31,41,55,1)',
+                              borderRadius: 10,
+                              color: 'rgba(255,255,255,0.9)',
+                              fontSize: 12,
+                            }}
+                            labelFormatter={(step: number) => `step ${step}`}
+                            formatter={(value: number) => [formatAuxTooltipValue(opt.key, Number(value)), opt.label]}
+                          />
+                          <Line
+                            type="monotone"
+                            dataKey="value"
+                            name={opt.label}
+                            stroke={opt.color}
+                            strokeWidth={2}
+                            dot={false}
+                            isAnimationActive={false}
+                          />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Controls */}

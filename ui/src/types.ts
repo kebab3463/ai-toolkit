@@ -128,6 +128,7 @@ export interface TrainConfig {
   noise_scheduler: string;
   timestep_type: string;
   content_or_style: string;
+  content_or_style_reg?: string;
   optimizer: string;
   lr: number;
   lr_scheduler?: string;
@@ -168,6 +169,12 @@ export interface TrainStageConfig {
   lr_scheduler?: string;
   lr_scheduler_params?: Record<string, any>;
   max_grad_norm?: number;
+  /** Inherits from train.timestep_type when omitted */
+  timestep_type?: string;
+  /** Inherits from train.content_or_style when omitted */
+  content_or_style?: string;
+  /** Inherits from train.content_or_style_reg when omitted */
+  content_or_style_reg?: string;
 }
 
 export interface QuantizeKwargsConfig {

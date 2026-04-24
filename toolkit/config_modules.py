@@ -399,7 +399,7 @@ class TrainConfig:
             "content_or_style", "balanced"
         )
         self.content_or_style_reg: ContentOrStyleType = kwargs.get(
-            "content_or_style", "balanced"
+            "content_or_style_reg", self.content_or_style
         )
         self.steps: int = kwargs.get("steps", 1000)
         self.lr = kwargs.get("lr", 1e-6)
@@ -692,6 +692,13 @@ class TrainStageConfig:
         self.lr_scheduler: Optional[str] = kwargs.get("lr_scheduler", None)
         self.lr_scheduler_params: dict = kwargs.get("lr_scheduler_params", {})
         self.max_grad_norm: Optional[float] = kwargs.get("max_grad_norm", None)
+        self.timestep_type: Optional[str] = kwargs.get("timestep_type", None)
+        self.content_or_style: Optional[ContentOrStyleType] = kwargs.get(
+            "content_or_style", None
+        )
+        self.content_or_style_reg: Optional[ContentOrStyleType] = kwargs.get(
+            "content_or_style_reg", None
+        )
 
 
 ModelArch = Literal[

@@ -2067,6 +2067,7 @@ class SDTrainer(BaseSDTrainProcess):
         # flush()
 
     def hook_train_loop(self, batch: Union[DataLoaderBatchDTO, List[DataLoaderBatchDTO]]):
+        self._last_optimizer_metrics = {}
         if isinstance(batch, list):
             batch_list = batch
         else:
@@ -2099,11 +2100,28 @@ class SDTrainer(BaseSDTrainProcess):
         if not self.is_grad_accumulation_step:
             # fix this for multi params
             if self.train_config.optimizer != 'adafactor':
+                max_norm = float(self.train_config.max_grad_norm)
+                pre_clip_vals = []
                 if isinstance(self.params[0], dict):
                     for i in range(len(self.params)):
-                        self.accelerator.clip_grad_norm_(self.params[i]['params'], self.train_config.max_grad_norm)
+                        n = self.accelerator.clip_grad_norm_(
+                            self.params[i]['params'], self.train_config.max_grad_norm
+                        )
+                        if n is not None:
+                            pre_clip_vals.append(float(n.detach().float().cpu().item()))
                 else:
-                    self.accelerator.clip_grad_norm_(self.params, self.train_config.max_grad_norm)
+                    n = self.accelerator.clip_grad_norm_(
+                        self.params, self.train_config.max_grad_norm
+                    )
+                    if n is not None:
+                        pre_clip_vals.append(float(n.detach().float().cpu().item()))
+                if pre_clip_vals:
+                    gn_pre = max(pre_clip_vals)
+                    self._last_optimizer_metrics['grad_norm_pre'] = gn_pre
+                    if max_norm > 0.0:
+                        self._last_optimizer_metrics['grad_norm_post'] = min(gn_pre, max_norm)
+                    else:
+                        self._last_optimizer_metrics['grad_norm_post'] = gn_pre
             # only step if we are not accumulating
             with self.timer('optimizer_step'):
                 self.optimizer.step()

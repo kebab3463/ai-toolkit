@@ -76,6 +76,7 @@ export const defaultJobConfig: JobConfig = {
           lr_scheduler: 'constant',
           timestep_type: 'sigmoid',
           content_or_style: 'balanced',
+          content_or_style_reg: 'balanced',
           attention_backend: 'native',
           attention_backend_vae: 'native',
           attention_backend_text_encoder: 'native',
@@ -170,6 +171,9 @@ export const migrateJobConfig = (jobConfig: JobConfig): JobConfig => {
   if (!('attention_backend_text_encoder' in train)) train.attention_backend_text_encoder = 'native';
   if (!Array.isArray(train.stages)) train.stages = [];
   if (!('lr_scheduler' in train)) train.lr_scheduler = 'constant';
+  if (!('content_or_style_reg' in train)) {
+    train.content_or_style_reg = train.content_or_style ?? 'balanced';
+  }
 
   return jobConfig;
 };

@@ -135,6 +135,8 @@ class BaseSDTrainProcess(BaseTrainProcess):
         self.grad_accumulation_step = 1
         # if true, then we do not do an optimizer step. We are accumulating gradients
         self.is_grad_accumulation_step = False
+        # Optional scalars (e.g. grad norms) set by hook_train_loop for UILogger / Loss Graph
+        self._last_optimizer_metrics: dict = {}
         self.device = str(self.accelerator.device)
         self.device_torch = self.accelerator.device
         network_config = self.get_conf("network", None)
@@ -147,6 +149,14 @@ class BaseSDTrainProcess(BaseTrainProcess):
         self.train_stage_boundaries = []
         self.active_train_stage_idx: Optional[int] = None
         self.has_train_stages = False
+        self._stage_default_lr: Optional[float] = None
+        self._stage_default_max_grad_norm: Optional[float] = None
+        self._stage_default_optimizer_params: dict = {}
+        self._stage_default_lr_scheduler: Optional[str] = None
+        self._stage_default_lr_scheduler_params: dict = {}
+        self._stage_default_timestep_type: Optional[str] = None
+        self._stage_default_content_or_style: Optional[str] = None
+        self._stage_default_content_or_style_reg: Optional[str] = None
         self._setup_train_stages()
         model_config = self.get_conf("model", {})
         self.modules_being_trained: List[torch.nn.Module] = []
@@ -882,6 +892,22 @@ class BaseSDTrainProcess(BaseTrainProcess):
         if not self.has_train_stages:
             return
 
+        # Capture global defaults once so each stage can inherit from them.
+        self._stage_default_lr = self.train_config.lr
+        self._stage_default_max_grad_norm = self.train_config.max_grad_norm
+        self._stage_default_optimizer_params = copy.deepcopy(
+            self.train_config.optimizer_params
+        )
+        self._stage_default_lr_scheduler = self.train_config.lr_scheduler
+        self._stage_default_lr_scheduler_params = copy.deepcopy(
+            self.train_config.lr_scheduler_params
+        )
+        self._stage_default_timestep_type = self.train_config.timestep_type
+        self._stage_default_content_or_style = self.train_config.content_or_style
+        self._stage_default_content_or_style_reg = (
+            self.train_config.content_or_style_reg
+        )
+
         running_total = 0
         for idx, stage in enumerate(self.train_stages):
             if stage.steps <= 0:
@@ -892,21 +918,59 @@ class BaseSDTrainProcess(BaseTrainProcess):
         self.train_config.steps = running_total
 
         # Apply stage 1 defaults so optimizer/scheduler construction starts from stage 1 settings.
-        first_stage = self.train_stages[0]
-        if first_stage.lr is not None:
-            self.train_config.lr = first_stage.lr
-        if first_stage.max_grad_norm is not None:
-            self.train_config.max_grad_norm = first_stage.max_grad_norm
-        if first_stage.optimizer_params:
-            self.train_config.optimizer_params = copy.deepcopy(
-                first_stage.optimizer_params
-            )
-        if first_stage.lr_scheduler is not None:
-            self.train_config.lr_scheduler = first_stage.lr_scheduler
-        if first_stage.lr_scheduler_params:
-            self.train_config.lr_scheduler_params = copy.deepcopy(
-                first_stage.lr_scheduler_params
-            )
+        first_stage_effective = self._get_effective_train_stage(self.train_stages[0])
+        self.train_config.lr = first_stage_effective["lr"]
+        self.train_config.max_grad_norm = first_stage_effective["max_grad_norm"]
+        self.train_config.optimizer_params = first_stage_effective["optimizer_params"]
+        self.train_config.lr_scheduler = first_stage_effective["lr_scheduler"]
+        self.train_config.lr_scheduler_params = first_stage_effective[
+            "lr_scheduler_params"
+        ]
+        self.train_config.timestep_type = first_stage_effective["timestep_type"]
+        self.train_config.content_or_style = first_stage_effective["content_or_style"]
+        self.train_config.content_or_style_reg = first_stage_effective[
+            "content_or_style_reg"
+        ]
+
+    def _get_effective_train_stage(self, stage):
+        return {
+            "name": stage.name,
+            "steps": stage.steps,
+            "lr": self._stage_default_lr if stage.lr is None else stage.lr,
+            "max_grad_norm": (
+                self._stage_default_max_grad_norm
+                if stage.max_grad_norm is None
+                else stage.max_grad_norm
+            ),
+            "optimizer_params": {
+                **copy.deepcopy(self._stage_default_optimizer_params),
+                **copy.deepcopy(stage.optimizer_params or {}),
+            },
+            "lr_scheduler": (
+                self._stage_default_lr_scheduler
+                if stage.lr_scheduler is None
+                else stage.lr_scheduler
+            ),
+            "lr_scheduler_params": {
+                **copy.deepcopy(self._stage_default_lr_scheduler_params),
+                **copy.deepcopy(stage.lr_scheduler_params or {}),
+            },
+            "timestep_type": (
+                self._stage_default_timestep_type
+                if stage.timestep_type is None
+                else stage.timestep_type
+            ),
+            "content_or_style": (
+                self._stage_default_content_or_style
+                if stage.content_or_style is None
+                else stage.content_or_style
+            ),
+            "content_or_style_reg": (
+                self._stage_default_content_or_style_reg
+                if stage.content_or_style_reg is None
+                else stage.content_or_style_reg
+            ),
+        }
 
     def _get_train_stage_index_for_step(self, step: int) -> int:
         for idx, boundary in enumerate(self.train_stage_boundaries):
@@ -919,6 +983,29 @@ class BaseSDTrainProcess(BaseTrainProcess):
             return 0
         return self.train_stage_boundaries[stage_idx - 1]
 
+    def _scalar_metrics_for_ui_log(self, learning_rate: float) -> dict:
+        """Scalars written to loss_log.db alongside loss/* (UILogger)."""
+        out: dict = {"learning_rate": float(learning_rate)}
+        if self.optimizer is not None and len(self.optimizer.param_groups) > 0:
+            try:
+                wd = self.optimizer.param_groups[0].get("weight_decay", 0.0)
+                out["weight_decay"] = float(wd)
+            except (TypeError, ValueError):
+                pass
+        extra = getattr(self, "_last_optimizer_metrics", None)
+        if isinstance(extra, dict):
+            for k, v in extra.items():
+                if isinstance(v, bool):
+                    out[k] = float(int(v))
+                elif isinstance(v, (int, float)):
+                    out[k] = float(v)
+                else:
+                    try:
+                        out[k] = float(v)  # type: ignore[arg-type]
+                    except (TypeError, ValueError):
+                        pass
+        return out
+
     def _activate_train_stage_for_step(self, step: int, force: bool = False):
         if not self.has_train_stages:
             return
@@ -928,7 +1015,12 @@ class BaseSDTrainProcess(BaseTrainProcess):
             return
 
         stage = self.train_stages[stage_idx]
-        stage_name = stage.name if stage.name else f"stage_{stage_idx + 1}"
+        effective_stage = self._get_effective_train_stage(stage)
+        stage_name = (
+            effective_stage["name"]
+            if effective_stage["name"]
+            else f"stage_{stage_idx + 1}"
+        )
         stage_start_step = self._get_train_stage_start_step(stage_idx)
         stage_step = max(0, step - stage_start_step)
 
@@ -937,30 +1029,24 @@ class BaseSDTrainProcess(BaseTrainProcess):
             f"({stage_name}) at global step {step} (stage step {stage_step})"
         )
 
-        if stage.lr is not None and self.optimizer is not None:
+        if self.optimizer is not None:
             for group in self.optimizer.param_groups:
-                group["lr"] = stage.lr
-                group["initial_lr"] = stage.lr
+                group["lr"] = effective_stage["lr"]
+                group["initial_lr"] = effective_stage["lr"]
 
-        if stage.optimizer_params and self.optimizer is not None:
-            for key, value in stage.optimizer_params.items():
+        if self.optimizer is not None:
+            for key, value in effective_stage["optimizer_params"].items():
                 for group in self.optimizer.param_groups:
                     group[key] = value
                 self.optimizer.defaults[key] = value
 
-        if stage.max_grad_norm is not None:
-            self.train_config.max_grad_norm = stage.max_grad_norm
+        self.train_config.max_grad_norm = effective_stage["max_grad_norm"]
+        self.train_config.timestep_type = effective_stage["timestep_type"]
+        self.train_config.content_or_style = effective_stage["content_or_style"]
+        self.train_config.content_or_style_reg = effective_stage["content_or_style_reg"]
 
-        scheduler_name = (
-            stage.lr_scheduler
-            if stage.lr_scheduler is not None
-            else self.train_config.lr_scheduler
-        )
-        scheduler_params = (
-            copy.deepcopy(stage.lr_scheduler_params)
-            if stage.lr_scheduler_params
-            else {}
-        )
+        scheduler_name = effective_stage["lr_scheduler"]
+        scheduler_params = copy.deepcopy(effective_stage["lr_scheduler_params"])
         if (
             "max_iterations" not in scheduler_params
             and "total_iters" not in scheduler_params
@@ -2617,10 +2703,11 @@ class BaseSDTrainProcess(BaseTrainProcess):
 
         if self.has_train_stages:
             initial_stage = self.train_stages[0]
-            if initial_stage.lr_scheduler is not None:
-                self.train_config.lr_scheduler = initial_stage.lr_scheduler
-            if initial_stage.lr_scheduler_params:
-                lr_scheduler_params = copy.deepcopy(initial_stage.lr_scheduler_params)
+            effective_initial_stage = self._get_effective_train_stage(initial_stage)
+            self.train_config.lr_scheduler = effective_initial_stage["lr_scheduler"]
+            lr_scheduler_params = copy.deepcopy(
+                effective_initial_stage["lr_scheduler_params"]
+            )
             if (
                 "max_iterations" not in lr_scheduler_params
                 and "total_iters" not in lr_scheduler_params
@@ -2978,11 +3065,7 @@ class BaseSDTrainProcess(BaseTrainProcess):
 
                         if self.accelerator.is_main_process:
                             # log to logger
-                            self.logger.log(
-                                {
-                                    "learning_rate": learning_rate,
-                                }
-                            )
+                            self.logger.log(self._scalar_metrics_for_ui_log(learning_rate))
                             if loss_dict is not None:
                                 for key, value in loss_dict.items():
                                     self.logger.log(
@@ -2993,11 +3076,7 @@ class BaseSDTrainProcess(BaseTrainProcess):
                     elif self.logging_config.log_every is None:
                         if self.accelerator.is_main_process:
                             # log every step
-                            self.logger.log(
-                                {
-                                    "learning_rate": learning_rate,
-                                }
-                            )
+                            self.logger.log(self._scalar_metrics_for_ui_log(learning_rate))
                             for key, value in loss_dict.items():
                                 self.logger.log(
                                     {
