@@ -448,6 +448,11 @@ class TrainConfig:
             "merge_network_on_save_strength", 1.0
         )
         self.max_grad_norm = kwargs.get("max_grad_norm", 1.0)
+        # Optional: log grad norm / aggregate stats to UILogger (loss_log.db). Off by default for perf.
+        self.log_grad_norm_stats: bool = kwargs.get("log_grad_norm_stats", False)
+        self.grad_norm_log_every: int = max(
+            1, int(kwargs.get("grad_norm_log_every", 1))
+        )
         self.start_step = kwargs.get("start_step", None)
         self.free_u = kwargs.get("free_u", False)
         self.adapter_assist_name_or_path: Optional[str] = kwargs.get(

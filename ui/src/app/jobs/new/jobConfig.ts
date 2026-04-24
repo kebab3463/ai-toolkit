@@ -100,6 +100,8 @@ export const defaultJobConfig: JobConfig = {
           diff_output_preservation_class: 'person',
           switch_boundary_every: 1,
           loss_type: 'mse',
+          log_grad_norm_stats: false,
+          grad_norm_log_every: 1,
         },
         logging: {
           log_every: 1,
@@ -174,6 +176,8 @@ export const migrateJobConfig = (jobConfig: JobConfig): JobConfig => {
   if (!('content_or_style_reg' in train)) {
     train.content_or_style_reg = train.content_or_style ?? 'balanced';
   }
+  if (!('log_grad_norm_stats' in train)) train.log_grad_norm_stats = false;
+  if (!('grad_norm_log_every' in train)) train.grad_norm_log_every = 1;
 
   return jobConfig;
 };

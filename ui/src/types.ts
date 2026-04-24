@@ -156,6 +156,10 @@ export interface TrainConfig {
   do_differential_guidance?: boolean;
   differential_guidance_scale?: number;
   audio_loss_multiplier?: number;
+  /** When true, log grad norm stats to loss_log.db (off by default for performance). */
+  log_grad_norm_stats?: boolean;
+  /** Optimizer steps per GPU aggregate flush when log_grad_norm_stats and value > 1. */
+  grad_norm_log_every?: number;
 }
 
 export interface TrainStageConfig {

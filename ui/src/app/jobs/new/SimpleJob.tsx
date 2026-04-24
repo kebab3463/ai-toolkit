@@ -908,6 +908,28 @@ export default function SimpleJob({
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
               <div>
                 <Checkbox
+                  label="Log grad norm statistics (loss graph)"
+                  className="pt-1"
+                  checked={jobConfig.config.process[0].train.log_grad_norm_stats || false}
+                  onChange={value =>
+                    setJobConfig(value ? true : false, 'config.process[0].train.log_grad_norm_stats')
+                  }
+                />
+                {jobConfig.config.process[0].train.log_grad_norm_stats ? (
+                  <NumberInput
+                    label="Grad norm log every (optimizer steps)"
+                    className="pt-2"
+                    value={Math.max(1, (jobConfig.config.process[0].train.grad_norm_log_every as number) ?? 1)}
+                    onChange={value =>
+                      setJobConfig(Math.max(1, Math.floor(Number(value) || 1)), 'config.process[0].train.grad_norm_log_every')
+                    }
+                    min={1}
+                    placeholder="1 = per-step scalars; 2+ = GPU buckets"
+                  />
+                ) : null}
+              </div>
+              <div>
+                <Checkbox
                   label="Do Differential Guidance"
                   docKey={'train.do_differential_guidance'}
                   className="pt-1"
