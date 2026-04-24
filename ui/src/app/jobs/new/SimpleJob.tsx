@@ -30,6 +30,23 @@ import { handleModelArchChange } from './utils';
 import { IoFlaskSharp } from 'react-icons/io5';
 import { isMac } from '@/helpers/basic';
 
+const attentionBackendOptions: SelectOption[] = [
+  { value: 'native', label: 'Native' },
+  { value: 'flash', label: 'Flash' },
+  { value: 'xformers', label: 'xFormers' },
+  { value: 'sage', label: 'SageAttention' },
+  { value: 'sageattn3-blackwell', label: 'SageAttention3 Blackwell' },
+];
+
+const lrSchedulerOptions: SelectOption[] = [
+  { value: 'constant', label: 'Constant' },
+  { value: 'linear', label: 'Linear' },
+  { value: 'cosine', label: 'Cosine' },
+  { value: 'constant_with_warmup', label: 'Constant + Warmup' },
+  { value: 'cosine_with_restarts', label: 'Cosine with Restarts' },
+  { value: 'step', label: 'Step' },
+];
+
 type Props = {
   jobConfig: JobConfig;
   setJobConfig: (value: any, key: string) => void;
@@ -57,6 +74,8 @@ export default function SimpleJob({
   datasetOptions,
   isLoading,
 }: Props) {
+  const stages = (jobConfig.config.process[0].train.stages || []) as any[];
+
   const modelArch = useMemo(() => {
     return modelArchs.find(a => a.name === jobConfig.config.process[0].model.arch) as ModelArch;
   }, [jobConfig.config.process[0].model.arch]);
@@ -602,6 +621,13 @@ export default function SimpleJob({
                   min={0}
                   required
                 />
+                <SelectInput
+                  label="LR Scheduler"
+                  className="pt-2"
+                  value={jobConfig.config.process[0].train.lr_scheduler || 'constant'}
+                  onChange={value => setJobConfig(value, 'config.process[0].train.lr_scheduler')}
+                  options={lrSchedulerOptions}
+                />
               </div>
               <div>
                 {disableSections.includes('train.timestep_type') ? null : (
@@ -652,6 +678,27 @@ export default function SimpleJob({
                     min={0}
                   />
                 )}
+                <SelectInput
+                  label="UNet Attention Backend"
+                  className="pt-2"
+                  value={jobConfig.config.process[0].train.attention_backend || 'native'}
+                  onChange={value => setJobConfig(value, 'config.process[0].train.attention_backend')}
+                  options={attentionBackendOptions}
+                />
+                <SelectInput
+                  label="VAE Attention Backend"
+                  className="pt-2"
+                  value={jobConfig.config.process[0].train.attention_backend_vae || 'native'}
+                  onChange={value => setJobConfig(value, 'config.process[0].train.attention_backend_vae')}
+                  options={attentionBackendOptions}
+                />
+                <SelectInput
+                  label="Text Encoder Attention Backend"
+                  className="pt-2"
+                  value={jobConfig.config.process[0].train.attention_backend_text_encoder || 'native'}
+                  onChange={value => setJobConfig(value, 'config.process[0].train.attention_backend_text_encoder')}
+                  options={attentionBackendOptions}
+                />
               </div>
               <div>
                 <FormGroup label="EMA (Exponential Moving Average)">
@@ -820,7 +867,122 @@ export default function SimpleJob({
                   </>
                 )}
               </div>
+              <div>
+                <FormGroup label="Staged Training">
+                  <Checkbox
+                    label="Enable Stages"
+                    checked={stages.length > 0}
+                    onChange={value => {
+                      if (!value) {
+                        setJobConfig([], 'config.process[0].train.stages');
+                      } else {
+                        setJobConfig(
+                          [
+                            {
+                              name: 'stage_1',
+                              steps: 500,
+                              lr: jobConfig.config.process[0].train.lr,
+                              optimizer_params: {
+                                weight_decay: jobConfig.config.process[0].train.optimizer_params.weight_decay,
+                              },
+                              lr_scheduler: jobConfig.config.process[0].train.lr_scheduler || 'constant',
+                              lr_scheduler_params: {},
+                            },
+                          ],
+                          'config.process[0].train.stages',
+                        );
+                      }
+                    }}
+                  />
+                </FormGroup>
+              </div>
             </div>
+            {stages.length > 0 && (
+              <div className="pt-4">
+                {stages.map((stage, i) => (
+                  <div key={i} className="p-4 mb-3 rounded bg-gray-900 border border-gray-700">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      <TextInput
+                        label="Stage Name"
+                        value={stage.name || ''}
+                        onChange={value => setJobConfig(value, `config.process[0].train.stages[${i}].name`)}
+                        placeholder={`stage_${i + 1}`}
+                      />
+                      <NumberInput
+                        label="Stage Steps"
+                        value={stage.steps ?? 1}
+                        onChange={value => setJobConfig(value, `config.process[0].train.stages[${i}].steps`)}
+                        min={1}
+                      />
+                      <NumberInput
+                        label="Stage LR"
+                        value={stage.lr ?? jobConfig.config.process[0].train.lr}
+                        onChange={value => setJobConfig(value, `config.process[0].train.stages[${i}].lr`)}
+                        min={0}
+                      />
+                      <NumberInput
+                        label="Stage Weight Decay"
+                        value={stage.optimizer_params?.weight_decay ?? 0}
+                        onChange={value =>
+                          setJobConfig(value, `config.process[0].train.stages[${i}].optimizer_params.weight_decay`)
+                        }
+                        min={0}
+                      />
+                      <SelectInput
+                        label="Stage Scheduler"
+                        value={stage.lr_scheduler || 'constant'}
+                        onChange={value => setJobConfig(value, `config.process[0].train.stages[${i}].lr_scheduler`)}
+                        options={lrSchedulerOptions}
+                      />
+                      <NumberInput
+                        label="Max Grad Norm"
+                        value={stage.max_grad_norm ?? 1.0}
+                        onChange={value => setJobConfig(value, `config.process[0].train.stages[${i}].max_grad_norm`)}
+                        min={0}
+                      />
+                    </div>
+                    <div className="pt-3">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setJobConfig(
+                            stages.filter((_, idx) => idx !== i),
+                            'config.process[0].train.stages',
+                          )
+                        }
+                        className="px-3 py-1 bg-red-700 hover:bg-red-600 rounded text-sm"
+                      >
+                        Remove Stage
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  onClick={() =>
+                    setJobConfig(
+                      [
+                        ...stages,
+                        {
+                          name: `stage_${stages.length + 1}`,
+                          steps: 500,
+                          lr: jobConfig.config.process[0].train.lr,
+                          optimizer_params: {
+                            weight_decay: jobConfig.config.process[0].train.optimizer_params.weight_decay,
+                          },
+                          lr_scheduler: jobConfig.config.process[0].train.lr_scheduler || 'constant',
+                          lr_scheduler_params: {},
+                        },
+                      ],
+                      'config.process[0].train.stages',
+                    )
+                  }
+                  className="w-full px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors"
+                >
+                  Add Stage
+                </button>
+              </div>
+            )}
           </Card>
         </div>
         <div>

@@ -73,8 +73,13 @@ export const defaultJobConfig: JobConfig = {
           gradient_checkpointing: true,
           noise_scheduler: 'flowmatch',
           optimizer: 'adamw8bit',
+          lr_scheduler: 'constant',
           timestep_type: 'sigmoid',
           content_or_style: 'balanced',
+          attention_backend: 'native',
+          attention_backend_vae: 'native',
+          attention_backend_text_encoder: 'native',
+          stages: [],
           optimizer_params: {
             weight_decay: 1e-4,
           },
@@ -158,6 +163,13 @@ export const migrateJobConfig = (jobConfig: JobConfig): JobConfig => {
   if (isMac()) {
     jobConfig.config.process[0].device = 'mps';
   }
+
+  const train = jobConfig.config.process[0].train as any;
+  if (!('attention_backend' in train)) train.attention_backend = 'native';
+  if (!('attention_backend_vae' in train)) train.attention_backend_vae = 'native';
+  if (!('attention_backend_text_encoder' in train)) train.attention_backend_text_encoder = 'native';
+  if (!Array.isArray(train.stages)) train.stages = [];
+  if (!('lr_scheduler' in train)) train.lr_scheduler = 'constant';
 
   return jobConfig;
 };
