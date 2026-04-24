@@ -49,6 +49,8 @@ config:
         min_snr_gamma: 5.0
 #        skip_first_sample: true
         noise_offset: 0.0 # not needed for this
+        # log_grad_norm_stats: false   # true: log grad norms / bucket stats to loss_log.db (off by default)
+        # grad_norm_log_every: 1      # optimizer steps per GPU aggregate (1 = per-step scalars on CPU)
         # Optional staged training. If set, total train.steps is computed
         # from the sum of stage steps and stages are applied in order.
         # stages:

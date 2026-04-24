@@ -104,6 +104,7 @@ class BaseSDTrainProcess(BaseTrainProcess):
         self.is_grad_accumulation_step = False
         # Optional scalars (e.g. grad norms) set by hook_train_loop for UILogger / Loss Graph
         self._last_optimizer_metrics: dict = {}
+        self._is_final_train_step: bool = False
         self.device = str(self.accelerator.device)
         self.device_torch = self.accelerator.device
         network_config = self.get_conf('network', None)
@@ -917,6 +918,8 @@ class BaseSDTrainProcess(BaseTrainProcess):
         extra = getattr(self, "_last_optimizer_metrics", None)
         if isinstance(extra, dict):
             for k, v in extra.items():
+                if isinstance(k, str) and k.startswith("grad_norm"):
+                    continue
                 if isinstance(v, bool):
                     out[k] = float(int(v))
                 elif isinstance(v, (int, float)):
@@ -927,6 +930,38 @@ class BaseSDTrainProcess(BaseTrainProcess):
                     except (TypeError, ValueError):
                         pass
         return out
+
+    def _grad_norm_metrics_for_ui_log(self) -> dict:
+        """Grad / grad-aggregate keys for loss_log.db (logged every step when present)."""
+        out: dict = {}
+        extra = getattr(self, "_last_optimizer_metrics", None)
+        if not isinstance(extra, dict):
+            return out
+        for k, v in extra.items():
+            if not isinstance(k, str) or not k.startswith("grad_norm"):
+                continue
+            if isinstance(v, bool):
+                out[k] = float(int(v))
+            elif isinstance(v, (int, float)):
+                out[k] = float(v)
+            else:
+                try:
+                    if hasattr(v, "detach"):
+                        out[k] = float(v.detach().float().cpu().item())
+                except (TypeError, ValueError):
+                    pass
+        return out
+
+    def _log_ui_grad_metrics_if_any(self) -> None:
+        if not self.accelerator.is_main_process:
+            return
+        g = self._grad_norm_metrics_for_ui_log()
+        if g:
+            self.logger.log(g)
+
+    def flush_grad_norm_log_buffers(self) -> None:
+        """Override in SDTrainer to flush partial GPU grad-norm buffers at end of training."""
+        pass
 
     def _activate_train_stage_for_step(self, step: int, force: bool = False):
         if not self.has_train_stages:
@@ -3025,6 +3060,7 @@ class BaseSDTrainProcess(BaseTrainProcess):
                 self.torch_profiler.start()
             did_oom = False
             loss_dict = None
+            self._is_final_train_step = step >= self.train_config.steps - 1
             try:
                 with self.accelerator.accumulate(self.modules_being_trained):
                     loss_dict = self.hook_train_loop(batch_list)
@@ -3195,7 +3231,8 @@ class BaseSDTrainProcess(BaseTrainProcess):
                 
                 # commit log
                 if self.accelerator.is_main_process:
-                    with self.timer('commit_logger'):
+                    with self.timer("commit_logger"):
+                        self._log_ui_grad_metrics_if_any()
                         self.logger.commit(step=self.step_num)
 
                 # sets progress bar to match our step (step is complete, so completed count is step + 1)
@@ -3215,6 +3252,8 @@ class BaseSDTrainProcess(BaseTrainProcess):
         ###################################################################
         ##  END TRAIN LOOP
         ###################################################################
+        self.flush_grad_norm_log_buffers()
+
         self.accelerator.wait_for_everyone()
         if self.progress_bar is not None:
             self.progress_bar.close()

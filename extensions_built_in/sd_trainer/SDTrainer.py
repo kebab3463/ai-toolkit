@@ -119,6 +119,89 @@ class SDTrainer(BaseSDTrainProcess):
             raise ValueError(f"Unknown guidance loss target type {type(self.train_config.guidance_loss_target)}")
 
 
+        # Grad norm logging (optional): L=1 logs scalars per step; L>1 buffers on GPU, logs aggregates.
+        self._grad_norm_buf_pre_tensors: List[torch.Tensor] = []
+        self._grad_norm_buf_clip_max: List[float] = []
+        self._grad_norm_opt_count: int = 0
+        self._grad_norm_next_flush_k: int = max(
+            1, int(getattr(self.train_config, "grad_norm_log_every", 1))
+        )
+
+    def _grad_norm_log_enabled(self) -> bool:
+        return bool(getattr(self.train_config, "log_grad_norm_stats", False))
+
+    @staticmethod
+    def _grad_norm_next_flush_target(opt_count: int, log_every: int) -> int:
+        """Next optimizer-step index (inclusive) at which to flush the GPU buffer."""
+        L = max(1, int(log_every))
+        if L <= 1:
+            return opt_count + 1
+        k = int(opt_count)
+        if k % L == 0:
+            return k + L
+        return ((k // L) + 1) * L
+
+    def _maybe_flush_grad_norm_buffer_for_clip_cap_change(self) -> None:
+        if not self._grad_norm_log_enabled():
+            return
+        L = int(getattr(self.train_config, "grad_norm_log_every", 1))
+        if L <= 1 or not self._grad_norm_buf_pre_tensors:
+            return
+        new_cap = float(self.train_config.max_grad_norm)
+        old_cap = float(self._grad_norm_buf_clip_max[0])
+        if abs(new_cap - old_cap) <= 1e-12:
+            return
+        self._flush_grad_norm_gpu_buffer()
+
+    def _flush_grad_norm_gpu_buffer(self) -> None:
+        """Aggregate buffered pre-clip norms on GPU; write float stats to _last_optimizer_metrics."""
+        if not self._grad_norm_buf_pre_tensors:
+            return
+        pres = (
+            torch.stack([t.reshape(1) for t in self._grad_norm_buf_pre_tensors])
+            .reshape(-1)
+            .float()
+        )
+        cmx = torch.tensor(
+            self._grad_norm_buf_clip_max, device=pres.device, dtype=pres.dtype
+        )
+        clip_mask = cmx > 0
+        clipped = torch.zeros_like(pres)
+        if bool(clip_mask.any().item()):
+            clipped[clip_mask] = (pres[clip_mask] > cmx[clip_mask]).float()
+        clip_pct = float((clipped.mean() * 100.0).cpu().item())
+        post_vals = torch.minimum(pres, torch.where(cmx > 0, cmx, pres.clone()))
+        self._last_optimizer_metrics.update(
+            {
+                "grad_norm_pre_mean": float(pres.mean().cpu().item()),
+                "grad_norm_pre_median": float(torch.median(pres).cpu().item()),
+                "grad_norm_pre_min": float(pres.min().cpu().item()),
+                "grad_norm_pre_max": float(pres.max().cpu().item()),
+                "grad_norm_pre_std": (
+                    float(torch.std(pres, unbiased=False).cpu().item())
+                    if pres.numel() > 1
+                    else 0.0
+                ),
+                "grad_norm_clip_pct": clip_pct,
+                "grad_norm_post_mean": float(post_vals.mean().cpu().item()),
+            }
+        )
+        self._grad_norm_buf_pre_tensors.clear()
+        self._grad_norm_buf_clip_max.clear()
+        L = max(1, int(getattr(self.train_config, "grad_norm_log_every", 1)))
+        self._grad_norm_next_flush_k = self._grad_norm_next_flush_target(
+            self._grad_norm_opt_count, L
+        )
+
+    def flush_grad_norm_log_buffers(self) -> None:
+        if not self._grad_norm_log_enabled():
+            return
+        L = max(1, int(getattr(self.train_config, "grad_norm_log_every", 1)))
+        if L <= 1:
+            return
+        if self._grad_norm_buf_pre_tensors:
+            self._flush_grad_norm_gpu_buffer()
+
     def before_model_load(self):
         pass
 
@@ -2345,6 +2428,7 @@ class SDTrainer(BaseSDTrainProcess):
         self, batch: Union[DataLoaderBatchDTO, List[DataLoaderBatchDTO]]
     ):
         self._last_optimizer_metrics = {}
+        self._maybe_flush_grad_norm_buffer_for_clip_cap_change()
         if isinstance(batch, list):
             batch_list = batch
         else:
@@ -2387,29 +2471,47 @@ class SDTrainer(BaseSDTrainProcess):
             # fix this for multi params
             if self.train_config.optimizer != "adafactor":
                 max_norm = float(self.train_config.max_grad_norm)
-                pre_clip_vals = []
+                pre_clip_tensors: List[torch.Tensor] = []
                 if isinstance(self.params[0], dict):
                     for i in range(len(self.params)):
                         n = self.accelerator.clip_grad_norm_(
                             self.params[i]["params"], self.train_config.max_grad_norm
                         )
                         if n is not None:
-                            pre_clip_vals.append(float(n.detach().float().cpu().item()))
+                            pre_clip_tensors.append(n.detach().float().reshape(1))
                 else:
                     n = self.accelerator.clip_grad_norm_(
                         self.params, self.train_config.max_grad_norm
                     )
                     if n is not None:
-                        pre_clip_vals.append(float(n.detach().float().cpu().item()))
-                if pre_clip_vals:
-                    gn_pre = max(pre_clip_vals)
-                    self._last_optimizer_metrics["grad_norm_pre"] = gn_pre
-                    if max_norm > 0.0:
-                        self._last_optimizer_metrics["grad_norm_post"] = min(
-                            gn_pre, max_norm
+                        pre_clip_tensors.append(n.detach().float().reshape(1))
+                if pre_clip_tensors:
+                    gn_tensor = torch.max(torch.cat(pre_clip_tensors, dim=0)).reshape(1)
+                    if self._grad_norm_log_enabled():
+                        L = max(
+                            1, int(getattr(self.train_config, "grad_norm_log_every", 1))
                         )
-                    else:
-                        self._last_optimizer_metrics["grad_norm_post"] = gn_pre
+                        if L <= 1:
+                            gn_pre = float(gn_tensor.cpu().item())
+                            self._last_optimizer_metrics["grad_norm_pre"] = gn_pre
+                            if max_norm > 0.0:
+                                self._last_optimizer_metrics["grad_norm_post"] = min(
+                                    gn_pre, max_norm
+                                )
+                            else:
+                                self._last_optimizer_metrics["grad_norm_post"] = gn_pre
+                        else:
+                            self._grad_norm_buf_pre_tensors.append(
+                                gn_tensor.detach().to(dtype=torch.float32)
+                            )
+                            self._grad_norm_buf_clip_max.append(max_norm)
+                            self._grad_norm_opt_count += 1
+                            if (
+                                len(self._grad_norm_buf_pre_tensors) > 0
+                                and self._grad_norm_opt_count
+                                >= self._grad_norm_next_flush_k
+                            ):
+                                self._flush_grad_norm_gpu_buffer()
             # only step if we are not accumulating
             with self.timer('optimizer_step'):
                 self.optimizer.step()
@@ -2442,5 +2544,8 @@ class SDTrainer(BaseSDTrainProcess):
         )
 
         self.end_of_training_loop()
+
+        if getattr(self, "_is_final_train_step", False):
+            self.flush_grad_norm_log_buffers()
 
         return loss_dict

@@ -420,23 +420,36 @@ class TrainConfig:
         self.snr_gamma = kwargs.get("snr_gamma", None)
         # trains a gamma, offset, and scale to adjust loss to adapt to timestep differentials
         # this should balance the learning rate across all timesteps over time
-        self.learnable_snr_gos = kwargs.get('learnable_snr_gos', False)
-        self.noise_offset = kwargs.get('noise_offset', 0.0)
-        self.skip_first_sample = kwargs.get('skip_first_sample', False)
-        self.force_first_sample = kwargs.get('force_first_sample', False)
-        self.gradient_checkpointing = kwargs.get('gradient_checkpointing', True)
-        self.weight_jitter = kwargs.get('weight_jitter', 0.0)
-        self.merge_network_on_save = kwargs.get('merge_network_on_save', False)
-        self.merge_network_on_save_strength = kwargs.get('merge_network_on_save_strength', 1.0)
-        self.max_grad_norm = kwargs.get('max_grad_norm', 1.0)
-        self.start_step = kwargs.get('start_step', None)
-        self.free_u = kwargs.get('free_u', False)
-        self.adapter_assist_name_or_path: Optional[str] = kwargs.get('adapter_assist_name_or_path', None)
-        self.adapter_assist_type: Optional[str] = kwargs.get('adapter_assist_type', 't2i')  # t2i, control_net
-        self.noise_multiplier = kwargs.get('noise_multiplier', 1.0)
-        self.target_noise_multiplier = kwargs.get('target_noise_multiplier', 1.0)
-        self.random_noise_multiplier = kwargs.get('random_noise_multiplier', 0.0)
-        self.do_signal_correction_noise = kwargs.get('do_signal_correction_noise', False)
+        self.learnable_snr_gos = kwargs.get("learnable_snr_gos", False)
+        self.noise_offset = kwargs.get("noise_offset", 0.0)
+        self.skip_first_sample = kwargs.get("skip_first_sample", False)
+        self.force_first_sample = kwargs.get("force_first_sample", False)
+        self.gradient_checkpointing = kwargs.get("gradient_checkpointing", True)
+        self.weight_jitter = kwargs.get("weight_jitter", 0.0)
+        self.merge_network_on_save = kwargs.get("merge_network_on_save", False)
+        self.merge_network_on_save_strength = kwargs.get(
+            "merge_network_on_save_strength", 1.0
+        )
+        self.max_grad_norm = kwargs.get("max_grad_norm", 1.0)
+        # Optional: log grad norm / aggregate stats to UILogger (loss_log.db). Off by default for perf.
+        self.log_grad_norm_stats: bool = kwargs.get("log_grad_norm_stats", False)
+        self.grad_norm_log_every: int = max(
+            1, int(kwargs.get("grad_norm_log_every", 1))
+        )
+        self.start_step = kwargs.get("start_step", None)
+        self.free_u = kwargs.get("free_u", False)
+        self.adapter_assist_name_or_path: Optional[str] = kwargs.get(
+            "adapter_assist_name_or_path", None
+        )
+        self.adapter_assist_type: Optional[str] = kwargs.get(
+            "adapter_assist_type", "t2i"
+        )  # t2i, control_net
+        self.noise_multiplier = kwargs.get("noise_multiplier", 1.0)
+        self.target_noise_multiplier = kwargs.get("target_noise_multiplier", 1.0)
+        self.random_noise_multiplier = kwargs.get("random_noise_multiplier", 0.0)
+        self.do_signal_correction_noise = kwargs.get(
+            "do_signal_correction_noise", False
+        )
         # batch noise correction adds other images in the batch as noise to correct away from other images
         self.do_batch_noise_correction = kwargs.get('do_batch_noise_correction', False)
         self.batch_noise_correction_scale = kwargs.get('batch_noise_correction_scale', 0.1)
