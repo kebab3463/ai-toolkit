@@ -109,8 +109,13 @@ class BaseSDTrainProcess(BaseTrainProcess):
             self.network_config = NetworkConfig(**network_config)
         else:
             self.network_config = None
-        self.train_config = TrainConfig(**self.get_conf('train', {}))
-        model_config = self.get_conf('model', {})
+        self.train_config = TrainConfig(**self.get_conf("train", {}))
+        self.train_stages = []
+        self.train_stage_boundaries = []
+        self.active_train_stage_idx: Optional[int] = None
+        self.has_train_stages = False
+        self._setup_train_stages()
+        model_config = self.get_conf("model", {})
         self.modules_being_trained: List[torch.nn.Module] = []
 
         # update modelconfig dtype to match train
@@ -789,6 +794,215 @@ class BaseSDTrainProcess(BaseTrainProcess):
             for param in group['params']:
                 if isinstance(param, torch.nn.Parameter):  # Ensure it's a proper parameter
                     param.requires_grad_(True)
+
+    def _setup_train_stages(self):
+        self.train_stages = list(self.train_config.stages)
+        self.train_stage_boundaries = []
+        self.active_train_stage_idx = None
+        self.has_train_stages = len(self.train_stages) > 0
+
+        if not self.has_train_stages:
+            return
+
+        running_total = 0
+        for idx, stage in enumerate(self.train_stages):
+            if stage.steps <= 0:
+                raise ValueError(f"train.stages[{idx}].steps must be greater than 0")
+            running_total += stage.steps
+            self.train_stage_boundaries.append(running_total)
+
+        self.train_config.steps = running_total
+
+        # Apply stage 1 defaults so optimizer/scheduler construction starts from stage 1 settings.
+        first_stage = self.train_stages[0]
+        if first_stage.lr is not None:
+            self.train_config.lr = first_stage.lr
+        if first_stage.max_grad_norm is not None:
+            self.train_config.max_grad_norm = first_stage.max_grad_norm
+        if first_stage.optimizer_params:
+            self.train_config.optimizer_params = copy.deepcopy(
+                first_stage.optimizer_params
+            )
+        if first_stage.lr_scheduler is not None:
+            self.train_config.lr_scheduler = first_stage.lr_scheduler
+        if first_stage.lr_scheduler_params:
+            self.train_config.lr_scheduler_params = copy.deepcopy(
+                first_stage.lr_scheduler_params
+            )
+
+    def _get_train_stage_index_for_step(self, step: int) -> int:
+        for idx, boundary in enumerate(self.train_stage_boundaries):
+            if step < boundary:
+                return idx
+        return len(self.train_stages) - 1
+
+    def _get_train_stage_start_step(self, stage_idx: int) -> int:
+        if stage_idx <= 0:
+            return 0
+        return self.train_stage_boundaries[stage_idx - 1]
+
+    def _activate_train_stage_for_step(self, step: int, force: bool = False):
+        if not self.has_train_stages:
+            return
+
+        stage_idx = self._get_train_stage_index_for_step(step)
+        if not force and stage_idx == self.active_train_stage_idx:
+            return
+
+        stage = self.train_stages[stage_idx]
+        stage_name = stage.name if stage.name else f"stage_{stage_idx + 1}"
+        stage_start_step = self._get_train_stage_start_step(stage_idx)
+        stage_step = max(0, step - stage_start_step)
+
+        print_acc(
+            f"Activating training stage {stage_idx + 1}/{len(self.train_stages)} "
+            f"({stage_name}) at global step {step} (stage step {stage_step})"
+        )
+
+        if stage.lr is not None and self.optimizer is not None:
+            for group in self.optimizer.param_groups:
+                group["lr"] = stage.lr
+                group["initial_lr"] = stage.lr
+
+        if stage.optimizer_params and self.optimizer is not None:
+            for key, value in stage.optimizer_params.items():
+                for group in self.optimizer.param_groups:
+                    group[key] = value
+                self.optimizer.defaults[key] = value
+
+        if stage.max_grad_norm is not None:
+            self.train_config.max_grad_norm = stage.max_grad_norm
+
+        scheduler_name = (
+            stage.lr_scheduler
+            if stage.lr_scheduler is not None
+            else self.train_config.lr_scheduler
+        )
+        scheduler_params = (
+            copy.deepcopy(stage.lr_scheduler_params)
+            if stage.lr_scheduler_params
+            else {}
+        )
+        if (
+            "max_iterations" not in scheduler_params
+            and "total_iters" not in scheduler_params
+        ):
+            scheduler_params["total_iters"] = stage.steps
+
+        self.lr_scheduler = get_lr_scheduler(
+            scheduler_name, self.optimizer, **scheduler_params
+        )
+        self.lr_scheduler.step(stage_step)
+
+        self.active_train_stage_idx = stage_idx
+
+    def _normalize_attention_backend(self, backend: str) -> str:
+        if backend is None:
+            return "native"
+        normalized = str(backend).strip().lower()
+        alias_map = {
+            "default": "native",
+            "sdpa": "native",
+            "x": "xformers",
+            "sageattention": "sage",
+            "sageattn": "sage",
+            "sageattention3-blackwell": "sageattn3-blackwell",
+            "sageattention3": "sageattn3-blackwell",
+            "sageattn3": "sageattn3-blackwell",
+        }
+        return alias_map.get(normalized, normalized)
+
+    def _try_enable_flux_sageattn3_blackwell(
+        self,
+        unet,
+        include_unet: bool = True,
+        include_vae: bool = False,
+        include_text_encoder: bool = False,
+        vae=None,
+        text_encoder=None,
+    ) -> bool:
+        try:
+            from sageattn3 import sageattn3_blackwell  # noqa: F401
+            from toolkit.models.flux_sage_attn import (
+                FluxSageAttn3BlackwellProcessor2_0,
+                SageAttn3BlackwellProcessor2_0,
+            )
+            from diffusers.models.attention_processor import Attention
+        except Exception as e:
+            print_acc(f"Failed to import sageattn3 backend: {e}")
+            return False
+
+        patched_count = 0
+        generic_processor = SageAttn3BlackwellProcessor2_0()
+        patched_targets = []
+
+        generic_targets = []
+        if include_unet:
+            generic_targets.extend([unet, self.sd.refiner_unet])
+        if include_vae:
+            generic_targets.append(vae)
+        if include_text_encoder:
+            if isinstance(text_encoder, list):
+                generic_targets.extend(text_encoder)
+            elif text_encoder is not None:
+                generic_targets.append(text_encoder)
+
+        for target_idx, target in enumerate(generic_targets):
+            if target is None:
+                continue
+            target_name = target.__class__.__name__
+            target_patch_count = 0
+
+            if hasattr(target, "set_attn_processor"):
+                try:
+                    target.set_attn_processor(generic_processor)
+                    patched_count += 1
+                    target_patch_count += 1
+                except Exception:
+                    pass
+            # Some backbones do not expose set_attn_processor at the top-level.
+            # Walk attention modules directly where possible.
+            try:
+                for _, module in target.named_modules():
+                    if isinstance(module, Attention) and hasattr(
+                        module, "set_processor"
+                    ):
+                        try:
+                            module.set_processor(generic_processor)
+                            patched_count += 1
+                            target_patch_count += 1
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+            if target_patch_count > 0:
+                patched_targets.append(
+                    f"{target_name}[{target_idx}]={target_patch_count}"
+                )
+
+        if (
+            patched_count == 0
+            and include_unet
+            and hasattr(unet, "transformer_blocks")
+            and hasattr(unet, "single_transformer_blocks")
+        ):
+            for block in unet.transformer_blocks:
+                block.attn.set_processor(FluxSageAttn3BlackwellProcessor2_0())
+            for block in unet.single_transformer_blocks:
+                block.attn.set_processor(FluxSageAttn3BlackwellProcessor2_0())
+            patched_count += 1
+            patched_targets.append("flux_block_fallback=1")
+
+        if patched_count == 0:
+            print_acc(
+                "Could not apply sageattn3-blackwell processors to any attention modules"
+            )
+            return False
+        print_acc(
+            f"Using attention backend: sageattn3-blackwell (patched {patched_count} module(s): {', '.join(patched_targets)})"
+        )
+        return True
 
     def setup_ema(self):
         if self.train_config.ema_config.use_ema:
@@ -1802,19 +2016,108 @@ class BaseSDTrainProcess(BaseTrainProcess):
                     # if it has it
                     if hasattr(te, 'enable_xformers_memory_efficient_attention'):
                         te.enable_xformers_memory_efficient_attention()
-        
-        if self.train_config.attention_backend != 'native':
-            if hasattr(vae, 'set_attention_backend'):
-                vae.set_attention_backend(self.train_config.attention_backend)
-            if hasattr(unet, 'set_attention_backend'):
+
+        self.train_config.attention_backend = self._normalize_attention_backend(
+            self.train_config.attention_backend
+        )
+        self.train_config.attention_backend_vae = self._normalize_attention_backend(
+            self.train_config.attention_backend_vae
+        )
+        self.train_config.attention_backend_text_encoder = (
+            self._normalize_attention_backend(
+                self.train_config.attention_backend_text_encoder
+            )
+        )
+
+        explicit_attention_backend_requested = any(
+            backend != "native"
+            for backend in [
+                self.train_config.attention_backend,
+                self.train_config.attention_backend_vae,
+                self.train_config.attention_backend_text_encoder,
+            ]
+        )
+        if explicit_attention_backend_requested and self.train_config.xformers:
+            self.train_config.xformers = False
+            print_acc(
+                "Explicit attention backend requested; disabling xformers to avoid backend conflicts."
+            )
+
+        if self.train_config.attention_backend == "sageattn3-blackwell":
+            did_enable = self._try_enable_flux_sageattn3_blackwell(
+                unet,
+                include_vae=self.train_config.attention_backend_vae
+                == "sageattn3-blackwell",
+                include_text_encoder=self.train_config.attention_backend_text_encoder
+                == "sageattn3-blackwell",
+                vae=vae,
+                text_encoder=text_encoder,
+            )
+            if not did_enable:
+                raise ValueError(
+                    "attention_backend='sageattn3-blackwell' requested, but backend could not be enabled."
+                )
+        elif self.train_config.attention_backend != "native":
+            if hasattr(unet, "set_attention_backend"):
                 unet.set_attention_backend(self.train_config.attention_backend)
+            if self.sd.refiner_unet is not None and hasattr(
+                self.sd.refiner_unet, "set_attention_backend"
+            ):
+                self.sd.refiner_unet.set_attention_backend(
+                    self.train_config.attention_backend
+                )
+            print_acc(
+                f"Using UNet attention backend: {self.train_config.attention_backend}"
+            )
+
+        if self.train_config.attention_backend_vae == "sageattn3-blackwell":
+            did_enable_vae = self._try_enable_flux_sageattn3_blackwell(
+                unet,
+                include_unet=False,
+                include_vae=True,
+                include_text_encoder=False,
+                vae=vae,
+                text_encoder=text_encoder,
+            )
+            if not did_enable_vae:
+                raise ValueError(
+                    "attention_backend_vae='sageattn3-blackwell' requested, but backend could not be enabled."
+                )
+        elif self.train_config.attention_backend_vae != "native":
+            if hasattr(vae, "set_attention_backend"):
+                vae.set_attention_backend(self.train_config.attention_backend_vae)
+            print_acc(
+                f"Using VAE attention backend: {self.train_config.attention_backend_vae}"
+            )
+
+        if self.train_config.attention_backend_text_encoder == "sageattn3-blackwell":
+            did_enable_text = self._try_enable_flux_sageattn3_blackwell(
+                unet,
+                include_unet=False,
+                include_vae=False,
+                include_text_encoder=True,
+                vae=vae,
+                text_encoder=text_encoder,
+            )
+            if not did_enable_text:
+                raise ValueError(
+                    "attention_backend_text_encoder='sageattn3-blackwell' requested, but backend could not be enabled."
+                )
+        elif self.train_config.attention_backend_text_encoder != "native":
             if isinstance(text_encoder, list):
                 for te in text_encoder:
-                    if hasattr(te, 'set_attention_backend'):
-                        te.set_attention_backend(self.train_config.attention_backend)
+                    if hasattr(te, "set_attention_backend"):
+                        te.set_attention_backend(
+                            self.train_config.attention_backend_text_encoder
+                        )
             else:
-                if hasattr(text_encoder, 'set_attention_backend'):
-                    text_encoder.set_attention_backend(self.train_config.attention_backend)
+                if hasattr(text_encoder, "set_attention_backend"):
+                    text_encoder.set_attention_backend(
+                        self.train_config.attention_backend_text_encoder
+                    )
+            print_acc(
+                f"Using text encoder attention backend: {self.train_config.attention_backend_text_encoder}"
+            )
         if self.train_config.sdp:
             torch.backends.cuda.enable_math_sdp(True)
             torch.backends.cuda.enable_flash_sdp(True)
@@ -2207,7 +2510,19 @@ class BaseSDTrainProcess(BaseTrainProcess):
         # set up the ema now that the optimizer (and its params) are ready
         self.setup_ema()
 
-        lr_scheduler_params = self.train_config.lr_scheduler_params
+        lr_scheduler_params = copy.deepcopy(self.train_config.lr_scheduler_params)
+
+        if self.has_train_stages:
+            initial_stage = self.train_stages[0]
+            if initial_stage.lr_scheduler is not None:
+                self.train_config.lr_scheduler = initial_stage.lr_scheduler
+            if initial_stage.lr_scheduler_params:
+                lr_scheduler_params = copy.deepcopy(initial_stage.lr_scheduler_params)
+            if (
+                "max_iterations" not in lr_scheduler_params
+                and "total_iters" not in lr_scheduler_params
+            ):
+                lr_scheduler_params["total_iters"] = initial_stage.steps
 
         # make sure it had bare minimum
         if 'max_iterations' not in lr_scheduler_params:
@@ -2509,7 +2824,9 @@ class BaseSDTrainProcess(BaseTrainProcess):
         # zero any gradients
         optimizer.zero_grad()
 
-        self.lr_scheduler.step(self.step_num)
+        self._activate_train_stage_for_step(self.step_num, force=True)
+        if not self.has_train_stages:
+            self.lr_scheduler.step(self.step_num)
 
         self.sd.set_device_state(self.train_device_state_preset)
         flush()
@@ -2531,6 +2848,7 @@ class BaseSDTrainProcess(BaseTrainProcess):
         did_first_flush = False
         flush_next = False
         for step in range(start_step_num, self.train_config.steps):
+            self._activate_train_stage_for_step(step)
             if self.train_config.do_paramiter_swapping:
                 self.optimizer.optimizer.swap_paramiters()
             self.timer.start('train_loop')

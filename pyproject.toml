@@ -50,10 +50,13 @@ dependencies = [
     "librosa==0.11.0",
     "mutagen==1.47.0",
     "diffusers",
+    "sageattention",
+    "sageattention3-blackwell",
+    "wheel>=0.47.0",
 ]
 
 [tool.uv]
-no-build-isolation-package = ["sageattention", "sageattention3-blackwell"]
+no-build-isolation-package = ["sageattention", "sageattention3-blackwell", "diffusers"]
 
 [tool.uv.workspace]
 members = [
@@ -63,7 +66,7 @@ members = [
 
 [[tool.uv.index]]
 name = "pytorch-cuda"
-url = "https://download.pytorch.org/whl/cu128"
+url = "https://download.pytorch.org/whl/cu130"
 explicit = true
 
 [tool.uv.sources]
@@ -74,4 +77,3 @@ torchaudio = [{ index = "pytorch-cuda", marker = "sys_platform == 'linux' and pl
 sageattention = { workspace = true }
 sageattention3-blackwell = { workspace = true }
 diffusers = { git = "https://github.com/huggingface/diffusers.git", rev = "dc8d9032171c83741fd37ed2b12bc9d8274464f3" }
-

@@ -399,14 +399,21 @@ class TrainConfig:
         self.xformers = kwargs.get('xformers', False)
         self.sdp = kwargs.get('sdp', False)
         # see https://huggingface.co/docs/diffusers/main/optimization/attention_backends#available-backends for options
-        self.attention_backend: str = kwargs.get('attention_backend', 'native')  # native, flash, _flash_3_hub, _flash_3, 
-        self.train_unet = kwargs.get('train_unet', True)
-        self.train_text_encoder = kwargs.get('train_text_encoder', False)
-        self.train_refiner = kwargs.get('train_refiner', True)
-        self.train_turbo = kwargs.get('train_turbo', False)
-        self.show_turbo_outputs = kwargs.get('show_turbo_outputs', False)
-        self.min_snr_gamma = kwargs.get('min_snr_gamma', None)
-        self.snr_gamma = kwargs.get('snr_gamma', None)
+        self.attention_backend: str = kwargs.get(
+            "attention_backend", "native"
+        )  # native, flash, _flash_3_hub, _flash_3,
+        # Optional per-module overrides. By default, keep VAE/text-encoder unchanged.
+        self.attention_backend_vae: str = kwargs.get("attention_backend_vae", "native")
+        self.attention_backend_text_encoder: str = kwargs.get(
+            "attention_backend_text_encoder", "native"
+        )
+        self.train_unet = kwargs.get("train_unet", True)
+        self.train_text_encoder = kwargs.get("train_text_encoder", False)
+        self.train_refiner = kwargs.get("train_refiner", True)
+        self.train_turbo = kwargs.get("train_turbo", False)
+        self.show_turbo_outputs = kwargs.get("show_turbo_outputs", False)
+        self.min_snr_gamma = kwargs.get("min_snr_gamma", None)
+        self.snr_gamma = kwargs.get("snr_gamma", None)
         # trains a gamma, offset, and scale to adjust loss to adapt to timestep differentials
         # this should balance the learning rate across all timesteps over time
         self.learnable_snr_gos = kwargs.get('learnable_snr_gos', False)
@@ -616,7 +623,22 @@ class TrainConfig:
         self.do_blank_stabilization = kwargs.get('do_blank_stabilization', False)
         
         self.audio_loss_multiplier = kwargs.get("audio_loss_multiplier", 1.0)
-        
+        stages_raw = kwargs.get("stages", [])
+        self.stages: List["TrainStageConfig"] = [
+            TrainStageConfig(**stage) for stage in stages_raw
+        ]
+
+
+class TrainStageConfig:
+    def __init__(self, **kwargs):
+        self.name: Optional[str] = kwargs.get("name", None)
+        self.steps: int = int(kwargs.get("steps", 0))
+        self.lr: Optional[float] = kwargs.get("lr", None)
+        self.optimizer_params: dict = kwargs.get("optimizer_params", {})
+        self.lr_scheduler: Optional[str] = kwargs.get("lr_scheduler", None)
+        self.lr_scheduler_params: dict = kwargs.get("lr_scheduler_params", {})
+        self.max_grad_norm: Optional[float] = kwargs.get("max_grad_norm", None)
+
         # will throw detailed error when it goes over
         self.max_loss_debug: bool = kwargs.get("max_loss_debug", False)
         # will clip the loss to this amount to prevent wild outliers

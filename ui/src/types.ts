@@ -156,6 +156,7 @@ export interface ValidationConfig {
 }
 
 export interface TrainConfig {
+  stages?: TrainStageConfig[];
   batch_size: number;
   bypass_guidance_embedding?: boolean;
   steps: number;
@@ -168,6 +169,11 @@ export interface TrainConfig {
   content_or_style: string;
   optimizer: string;
   lr: number;
+  lr_scheduler?: string;
+  lr_scheduler_params?: Record<string, any>;
+  attention_backend?: string;
+  attention_backend_vae?: string;
+  attention_backend_text_encoder?: string;
   ema_config?: EMAConfig;
   dtype: string;
   unload_text_encoder: boolean;
@@ -193,6 +199,19 @@ export interface TrainConfig {
   validation_config?: ValidationConfig;
   do_guidance_loss?: boolean;
   guidance_loss_target?: number;
+}
+
+export interface TrainStageConfig {
+  name?: string;
+  steps: number;
+  lr?: number;
+  optimizer_params?: {
+    weight_decay?: number;
+    [key: string]: any;
+  };
+  lr_scheduler?: string;
+  lr_scheduler_params?: Record<string, any>;
+  max_grad_norm?: number;
 }
 
 export interface QuantizeKwargsConfig {

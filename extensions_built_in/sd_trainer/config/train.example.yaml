@@ -40,9 +40,33 @@ config:
         batch_size: 4
         dtype: bf16
         xformers: true
+        # Attention backend defaults:
+        # - attention_backend applies to UNet/refiner only
+        # - VAE/text encoder remain unchanged unless explicitly set below
+        # attention_backend: "native" # e.g. native, flash, sage, sageattn3-blackwell
+        # attention_backend_vae: "native"
+        # attention_backend_text_encoder: "native"
         min_snr_gamma: 5.0
 #        skip_first_sample: true
         noise_offset: 0.0 # not needed for this
+        # Optional staged training. If set, total train.steps is computed
+        # from the sum of stage steps and stages are applied in order.
+        # stages:
+        #   - name: warmup
+        #     steps: 500
+        #     lr: 1e-5
+        #     optimizer_params:
+        #       weight_decay: 1e-4
+        #     lr_scheduler: "linear"
+        #     lr_scheduler_params:
+        #       start_factor: 0.1
+        #   - name: cosine_decay
+        #     steps: 2500
+        #     optimizer_params:
+        #       weight_decay: 1e-2
+        #     lr_scheduler: "cosine"
+        #     lr_scheduler_params:
+        #       eta_min: 1e-6
       model:
         # objective reality v2
         name_or_path: "https://civitai.com/models/128453?modelVersionId=142465"
