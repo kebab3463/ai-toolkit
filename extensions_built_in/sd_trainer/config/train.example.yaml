@@ -67,6 +67,10 @@ config:
         #     lr_scheduler: "cosine"
         #     lr_scheduler_params:
         #       eta_min: 1e-6
+        #     # Optional per-stage timestep sampling (inherits train.* when omitted):
+        #     # timestep_type: "linear"
+        #     # content_or_style: "content"   # balanced | content | style
+        #     # content_or_style_reg: "style"  # bias for is_reg batches
       model:
         # objective reality v2
         name_or_path: "https://civitai.com/models/128453?modelVersionId=142465"

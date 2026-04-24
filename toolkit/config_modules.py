@@ -377,23 +377,27 @@ LossTarget = Literal['noise', 'source', 'unaugmented', 'differential_noise']
 
 class TrainConfig:
     def __init__(self, **kwargs):
-        self.noise_scheduler = kwargs.get('noise_scheduler', 'ddpm')
-        self.content_or_style: ContentOrStyleType = kwargs.get('content_or_style', 'balanced')
-        self.content_or_style_reg: ContentOrStyleType = kwargs.get('content_or_style', 'balanced')
-        self.steps: int = kwargs.get('steps', 1000)
-        self.lr = kwargs.get('lr', 1e-6)
-        self.unet_lr = kwargs.get('unet_lr', self.lr)
-        self.text_encoder_lr = kwargs.get('text_encoder_lr', self.lr)
-        self.refiner_lr = kwargs.get('refiner_lr', self.lr)
-        self.embedding_lr = kwargs.get('embedding_lr', self.lr)
-        self.adapter_lr = kwargs.get('adapter_lr', self.lr)
-        self.optimizer = kwargs.get('optimizer', 'adamw')
-        self.optimizer_params = kwargs.get('optimizer_params', {})
-        self.lr_scheduler = kwargs.get('lr_scheduler', 'constant')
-        self.lr_scheduler_params = kwargs.get('lr_scheduler_params', {})
-        self.min_denoising_steps: int = kwargs.get('min_denoising_steps', 0)
-        self.max_denoising_steps: int = kwargs.get('max_denoising_steps', 999)
-        self.batch_size: int = kwargs.get('batch_size', 1)
+        self.noise_scheduler = kwargs.get("noise_scheduler", "ddpm")
+        self.content_or_style: ContentOrStyleType = kwargs.get(
+            "content_or_style", "balanced"
+        )
+        self.content_or_style_reg: ContentOrStyleType = kwargs.get(
+            "content_or_style_reg", self.content_or_style
+        )
+        self.steps: int = kwargs.get("steps", 1000)
+        self.lr = kwargs.get("lr", 1e-6)
+        self.unet_lr = kwargs.get("unet_lr", self.lr)
+        self.text_encoder_lr = kwargs.get("text_encoder_lr", self.lr)
+        self.refiner_lr = kwargs.get("refiner_lr", self.lr)
+        self.embedding_lr = kwargs.get("embedding_lr", self.lr)
+        self.adapter_lr = kwargs.get("adapter_lr", self.lr)
+        self.optimizer = kwargs.get("optimizer", "adamw")
+        self.optimizer_params = kwargs.get("optimizer_params", {})
+        self.lr_scheduler = kwargs.get("lr_scheduler", "constant")
+        self.lr_scheduler_params = kwargs.get("lr_scheduler_params", {})
+        self.min_denoising_steps: int = kwargs.get("min_denoising_steps", 0)
+        self.max_denoising_steps: int = kwargs.get("max_denoising_steps", 999)
+        self.batch_size: int = kwargs.get("batch_size", 1)
         self.orig_batch_size: int = self.batch_size
         self.dtype: str = kwargs.get('dtype', 'fp32')
         self.xformers = kwargs.get('xformers', False)
@@ -638,6 +642,13 @@ class TrainStageConfig:
         self.lr_scheduler: Optional[str] = kwargs.get("lr_scheduler", None)
         self.lr_scheduler_params: dict = kwargs.get("lr_scheduler_params", {})
         self.max_grad_norm: Optional[float] = kwargs.get("max_grad_norm", None)
+        self.timestep_type: Optional[str] = kwargs.get("timestep_type", None)
+        self.content_or_style: Optional[ContentOrStyleType] = kwargs.get(
+            "content_or_style", None
+        )
+        self.content_or_style_reg: Optional[ContentOrStyleType] = kwargs.get(
+            "content_or_style_reg", None
+        )
 
         # will throw detailed error when it goes over
         self.max_loss_debug: bool = kwargs.get("max_loss_debug", False)
