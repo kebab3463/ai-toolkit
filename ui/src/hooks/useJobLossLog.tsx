@@ -12,7 +12,17 @@ export interface LossPoint {
 
 type SeriesMap = Record<string, LossPoint[]>;
 
-export default function useJobLossLog(jobID: string, reloadInterval: null | number = null) {
+function isLossKey(key: string) {
+  // treat anything containing "loss" as a loss-series
+  // (covers loss, train_loss, val_loss, loss/xyz, etc.)
+  return /loss/i.test(key);
+}
+
+export default function useJobLossLog(
+  jobID: string,
+  reloadInterval: null | number = null,
+  extraMetricKeys: string[] = [],
+) {
   const [series, setSeries] = useState<SeriesMap>({});
   const [keys, setKeys] = useState<string[]>([]);
   const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error' | 'refreshing'>('idle');
@@ -23,11 +33,16 @@ export default function useJobLossLog(jobID: string, reloadInterval: null | numb
   // track last step per key so polling is incremental per series
   const lastStepByKeyRef = useRef<Record<string, number | null>>({});
 
+  const extraKeysSig = useMemo(
+    () => [...new Set(extraMetricKeys.filter(Boolean))].sort().join('|'),
+    [extraMetricKeys],
+  );
+
   const lossKeys = useMemo(() => {
-    const base = keys ?? [];
+    const base = (keys ?? []).filter(isLossKey);
     // if keys table is empty early on, fall back to just "loss"
     if (base.length === 0) return ['loss'];
-    return [...base].sort();
+    return base.sort();
   }, [keys]);
 
   const refreshLoss = useCallback(async () => {
@@ -49,10 +64,13 @@ export default function useJobLossLog(jobID: string, reloadInterval: null | numb
       const newKeys = first.keys ?? [];
       setKeys(newKeys);
 
-      const wantedLossKeys = (newKeys.length ? [...newKeys] : ['loss']).sort();
+      const wantedLossKeys = (newKeys.filter(isLossKey).length ? newKeys.filter(isLossKey) : ['loss']).sort();
+      const wantedExtraKeys = extraKeysSig ? extraKeysSig.split('|').filter(Boolean) : [];
 
-      // Step 2: fetch each loss key incrementally (since_step per key if polling)
-      const requests = wantedLossKeys.map(k => {
+      // Step 2: fetch each loss key + optional training scalar keys incrementally (since_step per key if polling)
+      const keysToFetch = [...new Set([...wantedLossKeys, ...wantedExtraKeys])].sort();
+
+      const requests = keysToFetch.map(k => {
         const params: Record<string, any> = { key: k };
 
         if (reloadInterval && lastStepByKeyRef.current[k] != null) {
@@ -95,9 +113,9 @@ export default function useJobLossLog(jobID: string, reloadInterval: null | numb
             : (lastStepByKeyRef.current[k] ?? null);
         }
 
-        // remove stale keys that no longer exist (rare, but keeps UI clean)
+        // remove stale keys that are no longer requested
         for (const existingKey of Object.keys(next)) {
-          if (!wantedLossKeys.includes(existingKey)) {
+          if (!keysToFetch.includes(existingKey)) {
             delete next[existingKey];
             delete lastStepByKeyRef.current[existingKey];
           }
@@ -114,7 +132,7 @@ export default function useJobLossLog(jobID: string, reloadInterval: null | numb
     } finally {
       inFlightRef.current = false;
     }
-  }, [jobID, reloadInterval]);
+  }, [jobID, reloadInterval, extraKeysSig]);
 
   // Delete every logged step in [minStep, maxStep] from the on-disk log, then
   // drop those points locally so the chart updates without a full reload.
@@ -140,14 +158,15 @@ export default function useJobLossLog(jobID: string, reloadInterval: null | numb
   // reset when job changes. Declared before the poll loop so the reset runs
   // before the first fetch when jobID changes.
   useEffect(() => {
+    // reset when job changes or optional metric set changes (need full history for new keys)
     didInitialLoadRef.current = false;
     lastStepByKeyRef.current = {};
     setSeries({});
     setKeys([]);
     setStatus('idle');
-  }, [jobID]);
+  }, [jobID, extraKeysSig]);
 
-  usePollLoop(refreshLoss, reloadInterval, [jobID]);
+  usePollLoop(refreshLoss, reloadInterval, [jobID, extraKeysSig]);
 
   return { series, keys, lossKeys, status, refreshLoss, deleteRange, setSeries };
 }
