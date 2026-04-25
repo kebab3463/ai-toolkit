@@ -1,6 +1,7 @@
 'use client';
 
 import { Job } from '@prisma/client';
+import type { JobConfig } from '@/types';
 import useJobLossLog, { LossPoint } from '@/hooks/useJobLossLog';
 import { useMemo, useState, useEffect, useCallback, useRef } from 'react';
 import {
@@ -74,6 +75,39 @@ const PALETTE = [
 
 function strokeForKey(key: string) {
   return PALETTE[hashToIndex(key, PALETTE.length)];
+}
+
+/** Matches Python: `f"{int(round(q * 1_000_000)):07d}"` for loss_log.db metric keys. */
+function gradNormQuantileSuffix(q: number): string {
+  return `${Math.round(q * 1e6).toString().padStart(7, '0')}`;
+}
+
+/** Extra bucket series from job config (grad_norm_log_percentiles). */
+function gradNormPercentileMetricCharts(
+  jobConfigStr: string | null,
+): { key: string; label: string; color: string }[] {
+  if (!jobConfigStr) return [];
+  try {
+    const jc = JSON.parse(jobConfigStr) as JobConfig;
+    const qs = jc?.config?.process?.[0]?.train?.grad_norm_log_percentiles;
+    if (!Array.isArray(qs)) return [];
+    const seenQ = new Set<string>();
+    const out: { key: string; label: string; color: string }[] = [];
+    for (const raw of qs) {
+      const q = Number(raw);
+      if (!Number.isFinite(q) || q < 0 || q > 1) continue;
+      const suf = gradNormQuantileSuffix(q);
+      if (seenQ.has(suf)) continue;
+      seenQ.add(suf);
+      const preKey = `grad_norm_pre_q${suf}`;
+      const postKey = `grad_norm_post_q${suf}`;
+      out.push({ key: preKey, label: `Grad pre q=${q}`, color: strokeForKey(preKey) });
+      out.push({ key: postKey, label: `Grad post q=${q}`, color: strokeForKey(postKey) });
+    }
+    return out;
+  } catch {
+    return [];
+  }
 }
 
 /** Plot area alignment: same left Y width + right gutter on every chart so step x-lines line up vertically. */
@@ -187,6 +221,8 @@ export default function JobLossGraph({ job }: Props) {
   /** 0 = one chunk over all loaded per-step grad points (CPU stats). */
   const [gradNormChunkSize, setGradNormChunkSize] = useState(0);
 
+  const gradPctCharts = useMemo(() => gradNormPercentileMetricCharts(job.job_config), [job.job_config]);
+
   const extraMetricKeys = useMemo(() => {
     const out: string[] = [];
     if (showAuxLr) out.push('learning_rate');
@@ -197,9 +233,12 @@ export default function JobLossGraph({ job }: Props) {
       for (const o of GRAD_AGG_METRIC_OPTIONS) {
         out.push(o.key);
       }
+      for (const o of gradPctCharts) {
+        out.push(o.key);
+      }
     }
     return out;
-  }, [showAuxLr, showAuxWd, showAuxGradPre, showAuxGradPost, showGradAgg]);
+  }, [showAuxLr, showAuxWd, showAuxGradPre, showAuxGradPost, showGradAgg, gradPctCharts]);
 
   const { series, lossKeys, status, refreshLoss } = useJobLossLog(job.id, 2000, extraMetricKeys);
 
@@ -453,9 +492,9 @@ export default function JobLossGraph({ job }: Props) {
       if (opt.key === 'grad_norm_post') return showAuxGradPost;
       return false;
     });
-    const agg = showGradAgg ? [...GRAD_AGG_METRIC_OPTIONS] : [];
+    const agg = showGradAgg ? [...GRAD_AGG_METRIC_OPTIONS, ...gradPctCharts] : [];
     return [...base, ...agg];
-  }, [showAuxWd, showAuxGradPre, showAuxGradPost, showGradAgg]);
+  }, [showAuxWd, showAuxGradPre, showAuxGradPost, showGradAgg, gradPctCharts]);
 
   const gradNormPairs = useMemo(
     () => alignGradNormPairs(series['grad_norm_pre'] ?? [], series['grad_norm_post'] ?? []),
@@ -727,8 +766,8 @@ export default function JobLossGraph({ job }: Props) {
         </div>
         <p className="text-[11px] text-gray-500 mb-3">
           Per-step grad norms are optional: enable Log grad norm statistics in the job Advanced tab. When grad norm log
-          every is greater than 1, the trainer buffers norms on the GPU and logs bucket statistics only. Weight decay
-          uses the first param group.
+          every is greater than 1, the trainer buffers norms on the GPU and logs bucket statistics (means, clip %, and
+          optional quantiles from the Advanced bucket-quantiles field). Weight decay uses the first param group.
         </p>
 
         {showAuxGradPre && showAuxGradPost && gradNormPairs.length > 0 && (

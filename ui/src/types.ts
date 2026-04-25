@@ -160,6 +160,11 @@ export interface TrainConfig {
   log_grad_norm_stats?: boolean;
   /** Optimizer steps per GPU aggregate flush when log_grad_norm_stats and value > 1. */
   grad_norm_log_every?: number;
+  /**
+   * Quantiles in [0, 1] (e.g. 0=min, 1=max) for pre/post grad norm within each GPU bucket when
+   * grad_norm_log_every > 1. Logged as grad_norm_pre_q0000000 … (7-digit suffix = round(q×1e6)) and grad_norm_post_q….
+   */
+  grad_norm_log_percentiles?: number[];
 }
 
 export interface TrainStageConfig {

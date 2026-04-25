@@ -1,5 +1,5 @@
 'use client';
-import { useMemo } from 'react';
+import { useMemo, useState, useEffect, useCallback } from 'react';
 import {
   modelArchs,
   ModelArch,
@@ -122,6 +122,30 @@ export default function SimpleJob({
     }
     return sections;
   }, [modelArch, jobType]);
+
+  const gnpArr = jobConfig.config.process[0].train.grad_norm_log_percentiles;
+  const gnpSerialized = JSON.stringify(Array.isArray(gnpArr) ? gnpArr : []);
+  const [gradPctDraft, setGradPctDraft] = useState('');
+  useEffect(() => {
+    const arr = jobConfig.config.process[0].train.grad_norm_log_percentiles;
+    setGradPctDraft(Array.isArray(arr) && arr.length ? arr.map(x => String(x)).join(', ') : '');
+  }, [gnpSerialized]);
+
+  const commitGradPctDraft = useCallback(() => {
+    const parts = gradPctDraft.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean);
+    const nums = parts.map(p => Number(p)).filter(n => Number.isFinite(n) && n >= 0 && n <= 1);
+    const seen = new Set<number>();
+    const uniq: number[] = [];
+    for (const n of nums) {
+      const sig = Math.round(n * 1e6);
+      if (seen.has(sig)) continue;
+      seen.add(sig);
+      uniq.push(n);
+      if (uniq.length >= 24) break;
+    }
+    setJobConfig(uniq, 'config.process[0].train.grad_norm_log_percentiles');
+    setGradPctDraft(uniq.length ? uniq.join(', ') : '');
+  }, [gradPctDraft, setJobConfig]);
 
   const isVideoModel = !!(modelArch?.group === 'video');
   const isAudioModel = !!(modelArch?.group === 'audio');
@@ -936,16 +960,30 @@ export default function SimpleJob({
                   }
                 />
                 {jobConfig.config.process[0].train.log_grad_norm_stats ? (
-                  <NumberInput
-                    label="Grad norm log every (optimizer steps)"
-                    className="pt-2"
-                    value={Math.max(1, (jobConfig.config.process[0].train.grad_norm_log_every as number) ?? 1)}
-                    onChange={value =>
-                      setJobConfig(Math.max(1, Math.floor(Number(value) || 1)), 'config.process[0].train.grad_norm_log_every')
-                    }
-                    min={1}
-                    placeholder="1 = per-step scalars; 2+ = GPU buckets"
-                  />
+                  <>
+                    <NumberInput
+                      label="Grad norm log every (optimizer steps)"
+                      className="pt-2"
+                      value={Math.max(1, (jobConfig.config.process[0].train.grad_norm_log_every as number) ?? 1)}
+                      onChange={value =>
+                        setJobConfig(Math.max(1, Math.floor(Number(value) || 1)), 'config.process[0].train.grad_norm_log_every')
+                      }
+                      min={1}
+                      placeholder="1 = per-step scalars; 2+ = GPU buckets"
+                    />
+                    <TextInput
+                      label="Bucket quantiles (0–1, comma-separated)"
+                      className="pt-2"
+                      value={gradPctDraft}
+                      onChange={setGradPctDraft}
+                      onBlur={commitGradPctDraft}
+                      placeholder="e.g. 0, 0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99, 1"
+                    />
+                    <p className="text-[10px] text-gray-500 pt-1">
+                      Logged on each GPU bucket flush when log every is 2+. Up to 24 values; metric keys use round(q *
+                      1e6) as a 7-digit suffix.
+                    </p>
+                  </>
                 ) : null}
               </div>
               <div>

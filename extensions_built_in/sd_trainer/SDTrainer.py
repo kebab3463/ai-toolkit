@@ -190,21 +190,31 @@ class SDTrainer(BaseSDTrainProcess):
             clipped[clip_mask] = (pres[clip_mask] > cmx[clip_mask]).float()
         clip_pct = float((clipped.mean() * 100.0).cpu().item())
         post_vals = torch.minimum(pres, torch.where(cmx > 0, cmx, pres.clone()))
-        self._last_optimizer_metrics.update(
-            {
-                "grad_norm_pre_mean": float(pres.mean().cpu().item()),
-                "grad_norm_pre_median": float(torch.median(pres).cpu().item()),
-                "grad_norm_pre_min": float(pres.min().cpu().item()),
-                "grad_norm_pre_max": float(pres.max().cpu().item()),
-                "grad_norm_pre_std": (
-                    float(torch.std(pres, unbiased=False).cpu().item())
-                    if pres.numel() > 1
-                    else 0.0
-                ),
-                "grad_norm_clip_pct": clip_pct,
-                "grad_norm_post_mean": float(post_vals.mean().cpu().item()),
-            }
+        agg: dict = {
+            "grad_norm_pre_mean": float(pres.mean().cpu().item()),
+            "grad_norm_pre_median": float(torch.median(pres).cpu().item()),
+            "grad_norm_pre_min": float(pres.min().cpu().item()),
+            "grad_norm_pre_max": float(pres.max().cpu().item()),
+            "grad_norm_pre_std": (
+                float(torch.std(pres, unbiased=False).cpu().item())
+                if pres.numel() > 1
+                else 0.0
+            ),
+            "grad_norm_clip_pct": clip_pct,
+            "grad_norm_post_mean": float(post_vals.mean().cpu().item()),
+        }
+        pct_list = list(
+            getattr(self.train_config, "grad_norm_log_percentiles", []) or []
         )
+        if pct_list and pres.numel() > 0:
+            qs = torch.tensor(pct_list, device=pres.device, dtype=torch.float32)
+            pre_q = torch.quantile(pres, qs, interpolation="linear")
+            post_q = torch.quantile(post_vals, qs, interpolation="linear")
+            for i, q in enumerate(pct_list):
+                suf = f"{int(round(float(q) * 1_000_000)):07d}"
+                agg[f"grad_norm_pre_q{suf}"] = float(pre_q[i].detach().cpu().item())
+                agg[f"grad_norm_post_q{suf}"] = float(post_q[i].detach().cpu().item())
+        self._last_optimizer_metrics.update(agg)
         self._grad_norm_buf_pre_tensors.clear()
         self._grad_norm_buf_clip_max.clear()
         L = max(1, int(getattr(self.train_config, "grad_norm_log_every", 1)))

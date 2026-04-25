@@ -102,6 +102,7 @@ export const defaultJobConfig: JobConfig = {
           loss_type: 'mse',
           log_grad_norm_stats: false,
           grad_norm_log_every: 1,
+          grad_norm_log_percentiles: [],
         },
         logging: {
           log_every: 1,
@@ -178,6 +179,7 @@ export const migrateJobConfig = (jobConfig: JobConfig): JobConfig => {
   }
   if (!('log_grad_norm_stats' in train)) train.log_grad_norm_stats = false;
   if (!('grad_norm_log_every' in train)) train.grad_norm_log_every = 1;
+  if (!Array.isArray(train.grad_norm_log_percentiles)) train.grad_norm_log_percentiles = [];
 
   return jobConfig;
 };

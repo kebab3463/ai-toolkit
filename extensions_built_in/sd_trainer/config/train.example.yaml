@@ -51,6 +51,8 @@ config:
         noise_offset: 0.0 # not needed for this
         # log_grad_norm_stats: false   # true: log grad norms / bucket stats to loss_log.db (off by default)
         # grad_norm_log_every: 1      # optimizer steps per GPU aggregate (1 = per-step scalars on CPU)
+        # Optional quantiles in [0,1] for each GPU bucket (only when grad_norm_log_every > 1). Example:
+        # grad_norm_log_percentiles: [0.0, 0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99, 1.0]
         # Optional staged training. If set, total train.steps is computed
         # from the sum of stage steps and stages are applied in order.
         # stages:

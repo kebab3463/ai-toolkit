@@ -1,5 +1,6 @@
 import os
 import time
+import math
 from typing import List, Optional, Literal, Tuple, Union, TYPE_CHECKING, Dict
 import random
 
@@ -13,6 +14,40 @@ from torchao.quantization.quant_primitives import _DTYPE_TO_BIT_WIDTH
 ImgExt = Literal["jpg", "png", "webp"]
 
 SaveFormat = Literal["safetensors", "diffusers"]
+
+_MAX_GRAD_NORM_PERCENTILES = 24
+
+
+def parse_grad_norm_log_percentiles_arg(raw: object) -> List[float]:
+    """Quantiles in [0, 1] for optional grad-norm bucket logging (see SDTrainer)."""
+    items: List[object]
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        items = [s.strip() for s in raw.replace(";", ",").split(",") if s.strip()]
+    elif isinstance(raw, (list, tuple)):
+        items = list(raw)
+    else:
+        return []
+    out: List[float] = []
+    seen: set[int] = set()
+    for x in items:
+        try:
+            q = float(x)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(q):
+            continue
+        q = max(0.0, min(1.0, q))
+        sig = int(round(q * 1_000_000))
+        if sig in seen:
+            continue
+        seen.add(sig)
+        out.append(q)
+        if len(out) >= _MAX_GRAD_NORM_PERCENTILES:
+            break
+    return out
+
 
 if TYPE_CHECKING:
     from toolkit.guidance import GuidanceType
@@ -452,6 +487,11 @@ class TrainConfig:
         self.log_grad_norm_stats: bool = kwargs.get("log_grad_norm_stats", False)
         self.grad_norm_log_every: int = max(
             1, int(kwargs.get("grad_norm_log_every", 1))
+        )
+        self.grad_norm_log_percentiles: List[float] = (
+            parse_grad_norm_log_percentiles_arg(
+                kwargs.get("grad_norm_log_percentiles", [])
+            )
         )
         self.start_step = kwargs.get("start_step", None)
         self.free_u = kwargs.get("free_u", False)
