@@ -191,3 +191,6 @@ qwen_autocaption_prompt.md
 scratchwork.ipynb
 uv.lock
 /ui/package*
+alicia.yaml
+prompts.txt
+autocaption_system_prompt.md

@@ -318,6 +318,30 @@ export default function JobLossGraph({ job }: Props) {
 
   const { series, lossKeys, status, refreshLoss } = useJobLossLog(job.id, 2000, extraMetricKeys);
 
+  const syncMargins = useMemo(() => chartMargins(showAuxLr), [showAuxLr]);
+
+  const auxChartsToShow = useMemo((): { key: string; label: string; color: string }[] => {
+    const base = AUX_METRIC_OPTIONS.filter(opt => {
+      if (opt.key === 'learning_rate') return false;
+      if (opt.key === 'weight_decay') return showAuxWd;
+      if (opt.key === 'grad_norm_pre') return showAuxGradPre;
+      if (opt.key === 'grad_norm_post') return showAuxGradPost;
+      return false;
+    });
+    const agg = showGradAgg ? [...GRAD_AGG_METRIC_OPTIONS, ...gradPctCharts] : [];
+    return [...base, ...agg];
+  }, [showAuxWd, showAuxGradPre, showAuxGradPost, showGradAgg, gradPctCharts]);
+
+  const gradNormPairs = useMemo(
+    () => alignGradNormPairs(series['grad_norm_pre'] ?? [], series['grad_norm_post'] ?? []),
+    [series],
+  );
+
+  const gradChunkChartData = useMemo(
+    () => computeGradNormChunkStats(gradNormPairs, gradNormChunkSize),
+    [gradNormPairs, gradNormChunkSize],
+  );
+
   // Controls
   const [useLogScale, setUseLogScale] = useState(false);
   const [showTrend, setShowTrend] = useState(true);
@@ -523,6 +547,51 @@ export default function JobLossGraph({ job }: Props) {
       });
     }
 
+    // Optional learning-rate overlay (separate y-scale, min–max in view, no tick labels).
+    if (showAuxLr) {
+      const lrPts: LossPoint[] = series['learning_rate'] ?? [];
+      const lrMap = new Map<number, number>();
+      for (const p of lrPts) {
+        if (p.value === null || !Number.isFinite(p.value as number)) continue;
+        if (!xsSet.has(p.step)) continue;
+        lrMap.set(p.step, p.value as number);
+      }
+      const lrVals: (number | null)[] = xs.map(s => (lrMap.has(s) ? (lrMap.get(s) as number) : null));
+      const finiteLr = lrVals.filter((v): v is number => v !== null && Number.isFinite(v));
+      if (finiteLr.length > 0) {
+        const lrScale = 'y::learning_rate';
+        let lrMin = Math.min(...finiteLr);
+        let lrMax = Math.max(...finiteLr);
+        if (lrMin === lrMax) {
+          const eps = Math.abs(lrMin) * 1e-6 || 1e-12;
+          lrMin -= eps;
+          lrMax += eps;
+        }
+        data.push(lrVals);
+        seriesConfigs.push({
+          label: 'Learning rate',
+          scale: lrScale,
+          stroke: 'rgba(251,191,36,0.38)',
+          width: 1.75,
+          spanGaps: false,
+          points: { show: false },
+          value: (_u, value) => formatAuxTooltipValue('learning_rate', value),
+        });
+        scales[lrScale] = {
+          range: () => [lrMin, lrMax],
+        };
+        axes.push({
+          scale: lrScale,
+          side: 1,
+          stroke: 'rgba(251,191,36,0.38)',
+          grid: { show: false },
+          ticks: { show: false },
+          values: () => [],
+          size: 8,
+        });
+      }
+    }
+
     // y-domain clipping (2nd–98th percentile), computed per scale.
     let yClip: Record<string, { min: number; max: number }> | null = null;
     if (clipOutliers && xs.length >= 10) {
@@ -546,7 +615,7 @@ export default function JobLossGraph({ job }: Props) {
     }
 
     return { data: data as uPlot.AlignedData, seriesConfigs, scales, axes, yClip };
-  }, [series, activeKeys, smoothing, plotStride, windowSize, useLogScale, showTrend, clipOutliers]);
+  }, [series, activeKeys, smoothing, plotStride, windowSize, useLogScale, showTrend, clipOutliers, showAuxLr]);
 
   // Layout wrapper we measure for sizing — uPlot collapses its own mount node
   // to width:min-content, so we can't read sizes off it.
@@ -570,8 +639,8 @@ export default function JobLossGraph({ job }: Props) {
   // axis distribution changes. Data updates go through setData.
   const hasData = (built.data[0]?.length ?? 0) > 1;
   const structuralKey = useMemo(
-    () => `${activeKeys.join('|')}|trend=${showTrend}|log=${useLogScale}|has=${hasData}`,
-    [activeKeys, showTrend, useLogScale, hasData],
+    () => `${activeKeys.join('|')}|trend=${showTrend}|log=${useLogScale}|lr=${showAuxLr}|has=${hasData}`,
+    [activeKeys, showTrend, useLogScale, showAuxLr, hasData],
   );
 
   useEffect(() => {
@@ -710,12 +779,7 @@ export default function JobLossGraph({ job }: Props) {
             chart with its own y-scale (min–max in view; no tick labels). Hover the curve for the exact value.
           </p>
         </div>
-        <div ref={chartWrapperRef} className="bg-gray-950 rounded-lg border border-gray-800 h-96 relative select-none">
-          {/* Drag selection overlay — positioned via refs, no re-renders */}
-          <div
-            ref={overlayRef}
-            style={{ display: 'none', position: 'absolute', top: 10, bottom: 10, pointerEvents: 'none', background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.4)', zIndex: 5 }}
-          />
+        <div className="bg-gray-950 rounded-lg border border-gray-800 h-96 relative select-none">
           {!hasData ? (
             <div className="absolute inset-0 flex items-center justify-center text-sm text-gray-400">
               {status === 'error' ? 'Failed to load loss logs.' : 'Waiting for loss points...'}
@@ -830,7 +894,7 @@ export default function JobLossGraph({ job }: Props) {
                         />
                         <Tooltip
                           contentStyle={{ background: 'rgba(17,24,39,0.96)', border: '1px solid #374151', fontSize: 11 }}
-                          formatter={(v: number | undefined) => [
+                          formatter={(v: unknown) => [
                             typeof v === 'number' && Number.isFinite(v) ? formatNum(v) : '',
                             'mean',
                           ]}
@@ -864,7 +928,7 @@ export default function JobLossGraph({ job }: Props) {
                         />
                         <Tooltip
                           contentStyle={{ background: 'rgba(17,24,39,0.96)', border: '1px solid #374151', fontSize: 11 }}
-                          formatter={(v: number | undefined) => [
+                          formatter={(v: unknown) => [
                             typeof v === 'number' && Number.isFinite(v) ? `${v.toFixed(2)}%` : '',
                             'clipped',
                           ]}
@@ -933,8 +997,8 @@ export default function JobLossGraph({ job }: Props) {
                               color: 'rgba(255,255,255,0.9)',
                               fontSize: 12,
                             }}
-                            labelFormatter={(step: number) => `step ${step}`}
-                            formatter={(value: number | undefined) => [
+                            labelFormatter={(step: unknown) => `step ${step}`}
+                            formatter={(value: unknown) => [
                               formatAuxTooltipValue(opt.key, Number(value ?? NaN)),
                               opt.label,
                             ]}
