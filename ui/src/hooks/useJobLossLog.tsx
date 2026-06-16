@@ -17,11 +17,7 @@ function isLossKey(key: string) {
   return /loss/i.test(key);
 }
 
-export default function useJobLossLog(
-  jobID: string,
-  reloadInterval: null | number = null,
-  extraMetricKeys: string[] = [],
-) {
+export default function useJobLossLog(jobID: string, reloadInterval: null | number = null) {
   const [series, setSeries] = useState<SeriesMap>({});
   const [keys, setKeys] = useState<string[]>([]);
   const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error' | 'refreshing'>('idle');
@@ -38,10 +34,10 @@ export default function useJobLossLog(
   );
 
   const lossKeys = useMemo(() => {
-    const base = (keys ?? []).filter(isLossKey);
+    const base = keys ?? [];
     // if keys table is empty early on, fall back to just "loss"
     if (base.length === 0) return ['loss'];
-    return base.sort();
+    return [...base].sort();
   }, [keys]);
 
   const refreshLoss = useCallback(async () => {
@@ -112,9 +108,9 @@ export default function useJobLossLog(
             : (lastStepByKeyRef.current[k] ?? null);
         }
 
-        // remove stale keys that no longer exist in DB listing (rare)
+        // remove stale keys that no longer exist (rare, but keeps UI clean)
         for (const existingKey of Object.keys(next)) {
-          if (!keysToFetch.includes(existingKey)) {
+          if (!wantedLossKeys.includes(existingKey)) {
             delete next[existingKey];
             delete lastStepByKeyRef.current[existingKey];
           }

@@ -32,6 +32,9 @@
     "sqlite3": "^6.0.1",
     "systeminformation": "^5.27.11",
     "uuid": "^14.0.0",
+    "react-virtuoso": "^4.18.7",
+    "react-zoom-pan-pinch": "^4.0.3",
+    "uplot": "^1.6.32",
     "yaml": "^2.7.0"
   },
   "devDependencies": {

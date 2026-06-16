@@ -71,6 +71,7 @@ export interface NetworkConfig {
   network_kwargs: {
     ignore_if_contains: string[];
   };
+  transformer_only?: boolean;
 }
 
 export interface SaveConfig {
@@ -156,6 +157,7 @@ export interface TrainConfig {
   do_differential_guidance?: boolean;
   differential_guidance_scale?: number;
   audio_loss_multiplier?: number;
+  max_loss?: number | null;
   /** When true, log grad norm stats to loss_log.db (off by default for performance). */
   log_grad_norm_stats?: boolean;
   /** Optimizer steps per GPU aggregate flush when log_grad_norm_stats and value > 1. */
@@ -204,6 +206,12 @@ export interface ModelConfig {
   layer_offloading_transformer_percent?: number;
   layer_offloading_text_encoder_percent?: number;
   assistant_lora_path?: string;
+  compile?: boolean;
+  block_compile?: boolean;
+  compile_mode?: 'default' | 'max-autotune' | 'fastest';
+  compile_fullgraph?: boolean;
+  compile_dynamic?: boolean;
+  cache_size_limit?: number;
 }
 
 export interface SampleItem {
@@ -301,9 +309,12 @@ export interface CaptionProcessConfig {
     extensions: string[];
     path_to_caption: string;
     recaption: boolean;
+    compile?: boolean;
     caption_prompt?: string;
     max_res?: number;
     max_new_tokens?: number;
+    fixed_caption?: string;
+    caption_extension?: string;
   }
 }
 

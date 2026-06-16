@@ -631,7 +631,12 @@ class TrainConfig:
         )  # mse, mae, wavelet, pixelspace, mean_flow, pseudo_huber
 
         # do the loss on a timestep to 0 prediction
-        self.t0_loss_target = kwargs.get("t0_loss_target", False)
+        self.t0_loss_target = kwargs.get('t0_loss_target', False)
+        self.t0_velocity_equiv_weight = kwargs.get('t0_velocity_equiv_weight', False)
+        
+        # do additional fft loss
+        self.do_fft_loss = kwargs.get('do_fft_loss', False)
+        self.do_fft_velocity_equiv_weight = kwargs.get('do_fft_velocity_equiv_weight', False)
 
         # scale the prediction by this. Increase for more detail, decrease for less
         self.pred_scaler = kwargs.get("pred_scaler", 1.0)
@@ -726,6 +731,11 @@ class TrainConfig:
         self.stages: List["TrainStageConfig"] = [
             TrainStageConfig(**stage) for stage in stages_raw
         ]
+        
+        # will throw detailed error when it goes over
+        self.max_loss_debug: bool = kwargs.get("max_loss_debug", False)
+        # will clip the loss to this amount to prevent wild outliers
+        self.max_loss: Optional[float] = kwargs.get("max_loss", None)
 
 
 class TrainStageConfig:
@@ -894,9 +904,16 @@ class ModelConfig:
         self.compile = kwargs.get("compile", False)
 
         if self.compile and self.quantize:
-            print("Warning: You cannot compile a quantized model. Disabling compile.")
-            self.compile = False
-
+            print("Quantized model detected - allowing torch.compile (experimental)")
+            # make it torchao instead of quantio for compatibility with torch compile
+            if self.qtype == "qfloat8":
+                self.qtype = "float8"
+        self.block_compile = kwargs.get("block_compile", False)
+        self.compile_mode = kwargs.get("compile_mode", "default")
+        self.compile_fullgraph = kwargs.get("compile_fullgraph", False)
+        self.compile_dynamic = kwargs.get("compile_dynamic", True)
+        self.cache_size_limit = kwargs.get("cache_size_limit", 8)
+        
         # kwargs to pass to the model
         self.model_kwargs = kwargs.get("model_kwargs", {})
 
@@ -1051,9 +1068,7 @@ class SliderConfig:
                 self.targets.append(target)
         print(f"Built {len(self.targets)} slider targets (with permutations)")
 
-
-ControlTypes = Literal["depth", "line", "pose", "inpaint", "mask"]
-
+ControlTypes = Literal['depth', 'line', 'pose', 'inpaint', 'mask', 'sapiens2_mask']
 
 class DatasetConfig:
     """
@@ -1135,39 +1150,26 @@ class DatasetConfig:
         # be the part conditioned to be inpainted. The alpha 1 (visible) section will be the part that is ignored
         self.inpaint_path: Union[str, List[str]] = kwargs.get("inpaint_path", None)
         # instead of cropping ot match image, it will serve the full size control image (clip images ie for ip adapters)
-        self.full_size_control_images: bool = kwargs.get(
-            "full_size_control_images", True
-        )
-        self.alpha_mask: bool = kwargs.get(
-            "alpha_mask", False
-        )  # if true, will use alpha channel as mask
-        self.mask_path: str = kwargs.get(
-            "mask_path", None
-        )  # focus mask (black and white. White has higher loss than black)
-        self.unconditional_path: str = kwargs.get(
-            "unconditional_path", None
-        )  # path where matching unconditional images are located
-        self.invert_mask: bool = kwargs.get("invert_mask", False)  # invert mask
-        self.mask_min_value: float = kwargs.get(
-            "mask_min_value", 0.0
-        )  # min value for . 0 - 1
-        self.poi: Union[str, None] = kwargs.get(
-            "poi", None
-        )  # if one is set and in json data, will be used as auto crop scale point of interes
-        self.use_short_captions: bool = kwargs.get(
-            "use_short_captions", False
-        )  # if true, will use 'caption_short' from json
-        self.num_repeats: int = kwargs.get(
-            "num_repeats", 1
-        )  # number of times to repeat dataset
+        self.full_size_control_images: bool = kwargs.get('full_size_control_images', True)
+        self.alpha_mask: bool = kwargs.get('alpha_mask', False)  # if true, will use alpha channel as mask
+        self.mask_path: str = kwargs.get('mask_path',
+                                         None)  # focus mask (black and white. White has higher loss than black)
+        self.unconditional_path: str = kwargs.get('unconditional_path',
+                                                  None)  # path where matching unconditional images are located
+        self.invert_mask: bool = kwargs.get('invert_mask', False)  # invert mask
+        self.mask_min_value: float = kwargs.get('mask_min_value', 0.0)  # min value for . 0 - 1
+        self.poi: Union[str, None] = kwargs.get('poi', None)
+        if self.poi is not None:
+            raise ValueError("poi is deprecated and is no longer supported")
+        self.use_short_captions: bool = kwargs.get('use_short_captions', False)  # if true, will use 'caption_short' from json
+        self.num_repeats: int = kwargs.get('num_repeats', 1)  # number of times to repeat dataset
         # cache latents will store them in memory
         self.cache_latents: bool = kwargs.get("cache_latents", False)
         # cache latents to disk will store them on disk. If both are true, it will save to disk, but keep in memory
-        self.cache_latents_to_disk: bool = kwargs.get("cache_latents_to_disk", False)
-        self.cache_clip_vision_to_disk: bool = kwargs.get(
-            "cache_clip_vision_to_disk", False
-        )
-        self.cache_text_embeddings: bool = kwargs.get("cache_text_embeddings", False)
+        self.cache_latents_to_disk: bool = kwargs.get('cache_latents_to_disk', False)
+        self.cache_clip_vision_to_disk: bool = kwargs.get('cache_clip_vision_to_disk', False)
+        self.cache_text_embeddings: bool = kwargs.get('cache_text_embeddings', False)
+        self.load_image_when_caching_latents: bool = kwargs.get('load_image_when_caching_latents', False)
 
         self.standardize_images: bool = kwargs.get("standardize_images", False)
 
