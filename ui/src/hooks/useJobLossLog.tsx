@@ -11,6 +11,12 @@ export interface LossPoint {
 
 type SeriesMap = Record<string, LossPoint[]>;
 
+function isLossKey(key: string) {
+  // treat anything containing "loss" as a loss-series
+  // (covers loss, train_loss, val_loss, loss/xyz, etc.)
+  return /loss/i.test(key);
+}
+
 export default function useJobLossLog(jobID: string, reloadInterval: null | number = null) {
   const [series, setSeries] = useState<SeriesMap>({});
   const [keys, setKeys] = useState<string[]>([]);
@@ -21,6 +27,11 @@ export default function useJobLossLog(jobID: string, reloadInterval: null | numb
 
   // track last step per key so polling is incremental per series
   const lastStepByKeyRef = useRef<Record<string, number | null>>({});
+
+  const extraKeysSig = useMemo(
+    () => [...new Set(extraMetricKeys.filter(Boolean))].sort().join('|'),
+    [extraMetricKeys],
+  );
 
   const lossKeys = useMemo(() => {
     const base = keys ?? [];
@@ -48,10 +59,13 @@ export default function useJobLossLog(jobID: string, reloadInterval: null | numb
       const newKeys = first.keys ?? [];
       setKeys(newKeys);
 
-      const wantedLossKeys = (newKeys.length ? [...newKeys] : ['loss']).sort();
+      const wantedLossKeys = (newKeys.filter(isLossKey).length ? newKeys.filter(isLossKey) : ['loss']).sort();
+      const wantedExtraKeys = extraKeysSig ? extraKeysSig.split('|').filter(Boolean) : [];
 
-      // Step 2: fetch each loss key incrementally (since_step per key if polling)
-      const requests = wantedLossKeys.map(k => {
+      // Step 2: fetch each loss key + optional training scalar keys incrementally (since_step per key if polling)
+      const keysToFetch = [...new Set([...wantedLossKeys, ...wantedExtraKeys])].sort();
+
+      const requests = keysToFetch.map(k => {
         const params: Record<string, any> = { key: k };
 
         if (reloadInterval && lastStepByKeyRef.current[k] != null) {
@@ -113,10 +127,10 @@ export default function useJobLossLog(jobID: string, reloadInterval: null | numb
     } finally {
       inFlightRef.current = false;
     }
-  }, [jobID, reloadInterval]);
+  }, [jobID, reloadInterval, extraKeysSig]);
 
   useEffect(() => {
-    // reset when job changes
+    // reset when job changes or optional metric set changes (need full history for new keys)
     didInitialLoadRef.current = false;
     lastStepByKeyRef.current = {};
     setSeries({});

@@ -1,5 +1,5 @@
 'use client';
-import { useMemo } from 'react';
+import { useMemo, useState, useEffect, useCallback } from 'react';
 import {
   modelArchs,
   ModelArch,
@@ -33,6 +33,36 @@ import { handleModelArchChange } from './utils';
 import { IoFlaskSharp } from 'react-icons/io5';
 import { isMac } from '@/helpers/basic';
 
+const attentionBackendOptions: SelectOption[] = [
+  { value: 'native', label: 'Native' },
+  { value: 'flash', label: 'Flash' },
+  { value: 'xformers', label: 'xFormers' },
+  { value: 'sage', label: 'SageAttention' },
+  { value: 'sageattn3-blackwell', label: 'SageAttention3 Blackwell' },
+];
+
+const lrSchedulerOptions: SelectOption[] = [
+  { value: 'constant', label: 'Constant' },
+  { value: 'linear', label: 'Linear' },
+  { value: 'cosine', label: 'Cosine' },
+  { value: 'constant_with_warmup', label: 'Constant + Warmup' },
+  { value: 'cosine_with_restarts', label: 'Cosine with Restarts' },
+  { value: 'step', label: 'Step' },
+];
+
+const timestepTypeOptions: SelectOption[] = [
+  { value: 'sigmoid', label: 'Sigmoid' },
+  { value: 'linear', label: 'Linear' },
+  { value: 'shift', label: 'Shift' },
+  { value: 'weighted', label: 'Weighted' },
+];
+
+const timestepBiasOptions: SelectOption[] = [
+  { value: 'balanced', label: 'Balanced' },
+  { value: 'content', label: 'High Noise' },
+  { value: 'style', label: 'Low Noise' },
+];
+
 type Props = {
   jobConfig: JobConfig;
   setJobConfig: (value: any, key: string) => void;
@@ -60,6 +90,23 @@ export default function SimpleJob({
   datasetOptions,
   isLoading,
 }: Props) {
+  const stages = (jobConfig.config.process[0].train.stages || []) as any[];
+  const setJsonObjectOrIgnore = (path: string, rawValue: string) => {
+    const trimmed = rawValue.trim();
+    if (trimmed === '') {
+      setJobConfig({}, path);
+      return;
+    }
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        setJobConfig(parsed, path);
+      }
+    } catch {
+      // ignore invalid JSON while typing
+    }
+  };
+
   const modelArch = useMemo(() => {
     return modelArchs.find(a => a.name === jobConfig.config.process[0].model.arch) as ModelArch;
   }, [jobConfig.config.process[0].model.arch]);
@@ -78,6 +125,30 @@ export default function SimpleJob({
     }
     return sections;
   }, [modelArch, jobType]);
+
+  const gnpArr = jobConfig.config.process[0].train.grad_norm_log_percentiles;
+  const gnpSerialized = JSON.stringify(Array.isArray(gnpArr) ? gnpArr : []);
+  const [gradPctDraft, setGradPctDraft] = useState('');
+  useEffect(() => {
+    const arr = jobConfig.config.process[0].train.grad_norm_log_percentiles;
+    setGradPctDraft(Array.isArray(arr) && arr.length ? arr.map(x => String(x)).join(', ') : '');
+  }, [gnpSerialized]);
+
+  const commitGradPctDraft = useCallback(() => {
+    const parts = gradPctDraft.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean);
+    const nums = parts.map(p => Number(p)).filter(n => Number.isFinite(n) && n >= 0 && n <= 1);
+    const seen = new Set<number>();
+    const uniq: number[] = [];
+    for (const n of nums) {
+      const sig = Math.round(n * 1e6);
+      if (seen.has(sig)) continue;
+      seen.add(sig);
+      uniq.push(n);
+      if (uniq.length >= 24) break;
+    }
+    setJobConfig(uniq, 'config.process[0].train.grad_norm_log_percentiles');
+    setGradPctDraft(uniq.length ? uniq.join(', ') : '');
+  }, [gradPctDraft, setJobConfig]);
 
   const isVideoModel = !!(modelArch?.group === 'video');
   const isAudioModel = !!(modelArch?.group === 'audio');
@@ -629,6 +700,86 @@ export default function SimpleJob({
                   min={0}
                   required
                 />
+                <SelectInput
+                  label="LR Scheduler"
+                  className="pt-2"
+                  value={jobConfig.config.process[0].train.lr_scheduler || 'constant'}
+                  onChange={value => setJobConfig(value, 'config.process[0].train.lr_scheduler')}
+                  options={lrSchedulerOptions}
+                />
+                {jobConfig.config.process[0].train.lr_scheduler === 'constant_with_warmup' && (
+                  <NumberInput
+                    label="Warmup Steps"
+                    className="pt-2"
+                    value={(jobConfig.config.process[0].train.lr_scheduler_params?.num_warmup_steps as number) ?? 1000}
+                    onChange={value => setJobConfig(value, 'config.process[0].train.lr_scheduler_params.num_warmup_steps')}
+                    min={0}
+                  />
+                )}
+                {jobConfig.config.process[0].train.lr_scheduler === 'step' && (
+                  <>
+                    <NumberInput
+                      label="Step Size"
+                      className="pt-2"
+                      value={(jobConfig.config.process[0].train.lr_scheduler_params?.step_size as number) ?? 1000}
+                      onChange={value => setJobConfig(value, 'config.process[0].train.lr_scheduler_params.step_size')}
+                      min={1}
+                    />
+                    <NumberInput
+                      label="Gamma"
+                      className="pt-2"
+                      value={(jobConfig.config.process[0].train.lr_scheduler_params?.gamma as number) ?? 0.5}
+                      onChange={value => setJobConfig(value, 'config.process[0].train.lr_scheduler_params.gamma')}
+                      min={0}
+                    />
+                  </>
+                )}
+                {jobConfig.config.process[0].train.lr_scheduler === 'cosine' && (
+                  <NumberInput
+                    label="Eta Min"
+                    className="pt-2"
+                    value={(jobConfig.config.process[0].train.lr_scheduler_params?.eta_min as number) ?? 0}
+                    onChange={value => setJobConfig(value, 'config.process[0].train.lr_scheduler_params.eta_min')}
+                    min={0}
+                  />
+                )}
+                {jobConfig.config.process[0].train.lr_scheduler === 'cosine_with_restarts' && (
+                  <NumberInput
+                    label="Restart Period (T0)"
+                    className="pt-2"
+                    value={(jobConfig.config.process[0].train.lr_scheduler_params?.T_0 as number) ?? 1000}
+                    onChange={value => setJobConfig(value, 'config.process[0].train.lr_scheduler_params.T_0')}
+                    min={1}
+                  />
+                )}
+                {jobConfig.config.process[0].train.lr_scheduler === 'linear' && (
+                  <NumberInput
+                    label="End learning rate"
+                    className="pt-2"
+                    value={
+                      (Number(jobConfig.config.process[0].train.lr) || 0) *
+                      (Number.isFinite(Number(jobConfig.config.process[0].train.lr_scheduler_params?.end_factor))
+                        ? Number(jobConfig.config.process[0].train.lr_scheduler_params?.end_factor)
+                        : 0)
+                    }
+                    onChange={value => {
+                      const base = Number(jobConfig.config.process[0].train.lr) || 1e-12;
+                      const endLr = Math.max(0, Number(value) || 0);
+                      const factor = base > 0 ? endLr / base : 0;
+                      setJobConfig(factor, 'config.process[0].train.lr_scheduler_params.end_factor');
+                    }}
+                    placeholder="eg. 0"
+                    min={0}
+                  />
+                )}
+                <TextAreaInput
+                  label="Advanced Scheduler Params (JSON)"
+                  className="pt-2"
+                  value={JSON.stringify(jobConfig.config.process[0].train.lr_scheduler_params || {}, null, 2)}
+                  onChange={value => setJsonObjectOrIgnore('config.process[0].train.lr_scheduler_params', value)}
+                  placeholder='e.g. {"factor": 1.0, "total_iters": 3000}'
+                  rows={4}
+                />
               </div>
               <div>
                 {disableSections.includes('train.timestep_type') ? null : (
@@ -637,12 +788,7 @@ export default function SimpleJob({
                     value={jobConfig.config.process[0].train.timestep_type}
                     disabled={disableSections.includes('train.timestep_type') || false}
                     onChange={value => setJobConfig(value, 'config.process[0].train.timestep_type')}
-                    options={[
-                      { value: 'sigmoid', label: 'Sigmoid' },
-                      { value: 'linear', label: 'Linear' },
-                      { value: 'shift', label: 'Shift' },
-                      { value: 'weighted', label: 'Weighted' },
-                    ]}
+                    options={timestepTypeOptions}
                   />
                 )}
                 <SelectInput
@@ -650,11 +796,7 @@ export default function SimpleJob({
                   className="pt-2"
                   value={jobConfig.config.process[0].train.content_or_style}
                   onChange={value => setJobConfig(value, 'config.process[0].train.content_or_style')}
-                  options={[
-                    { value: 'balanced', label: 'Balanced' },
-                    { value: 'content', label: 'High Noise' },
-                    { value: 'style', label: 'Low Noise' },
-                  ]}
+                  options={timestepBiasOptions}
                 />
                 <SelectInput
                   label="Loss Type"
@@ -679,6 +821,27 @@ export default function SimpleJob({
                     min={0}
                   />
                 )}
+                <SelectInput
+                  label="UNet Attention Backend"
+                  className="pt-2"
+                  value={jobConfig.config.process[0].train.attention_backend || 'native'}
+                  onChange={value => setJobConfig(value, 'config.process[0].train.attention_backend')}
+                  options={attentionBackendOptions}
+                />
+                <SelectInput
+                  label="VAE Attention Backend"
+                  className="pt-2"
+                  value={jobConfig.config.process[0].train.attention_backend_vae || 'native'}
+                  onChange={value => setJobConfig(value, 'config.process[0].train.attention_backend_vae')}
+                  options={attentionBackendOptions}
+                />
+                <SelectInput
+                  label="Text Encoder Attention Backend"
+                  className="pt-2"
+                  value={jobConfig.config.process[0].train.attention_backend_text_encoder || 'native'}
+                  onChange={value => setJobConfig(value, 'config.process[0].train.attention_backend_text_encoder')}
+                  options={attentionBackendOptions}
+                />
               </div>
               <div>
                 <FormGroup label="EMA (Exponential Moving Average)">
@@ -816,6 +979,42 @@ export default function SimpleJob({
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
               <div>
                 <Checkbox
+                  label="Log grad norm statistics (loss graph)"
+                  className="pt-1"
+                  checked={jobConfig.config.process[0].train.log_grad_norm_stats || false}
+                  onChange={value =>
+                    setJobConfig(value ? true : false, 'config.process[0].train.log_grad_norm_stats')
+                  }
+                />
+                {jobConfig.config.process[0].train.log_grad_norm_stats ? (
+                  <>
+                    <NumberInput
+                      label="Grad norm log every (optimizer steps)"
+                      className="pt-2"
+                      value={Math.max(1, (jobConfig.config.process[0].train.grad_norm_log_every as number) ?? 1)}
+                      onChange={value =>
+                        setJobConfig(Math.max(1, Math.floor(Number(value) || 1)), 'config.process[0].train.grad_norm_log_every')
+                      }
+                      min={1}
+                      placeholder="1 = per-step scalars; 2+ = GPU buckets"
+                    />
+                    <TextInput
+                      label="Bucket quantiles (0–1, comma-separated)"
+                      className="pt-2"
+                      value={gradPctDraft}
+                      onChange={setGradPctDraft}
+                      onBlur={commitGradPctDraft}
+                      placeholder="e.g. 0, 0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99, 1"
+                    />
+                    <p className="text-[10px] text-gray-500 pt-1">
+                      Logged on each GPU bucket flush when log every is 2+. Up to 24 values; metric keys use round(q *
+                      1e6) as a 7-digit suffix.
+                    </p>
+                  </>
+                ) : null}
+              </div>
+              <div>
+                <Checkbox
                   label="Do Differential Guidance"
                   docKey={'train.do_differential_guidance'}
                   className="pt-1"
@@ -847,7 +1046,244 @@ export default function SimpleJob({
                   </>
                 )}
               </div>
+              <div>
+                <FormGroup label="Staged Training">
+                  <Checkbox
+                    label="Enable Stages"
+                    checked={stages.length > 0}
+                    onChange={value => {
+                      if (!value) {
+                        setJobConfig([], 'config.process[0].train.stages');
+                      } else {
+                        setJobConfig(
+                          [
+                            {
+                              name: 'stage_1',
+                              steps: 500,
+                              lr: jobConfig.config.process[0].train.lr,
+                              optimizer_params: {
+                                weight_decay: jobConfig.config.process[0].train.optimizer_params.weight_decay,
+                              },
+                              lr_scheduler: jobConfig.config.process[0].train.lr_scheduler || 'constant',
+                              lr_scheduler_params: {},
+                            },
+                          ],
+                          'config.process[0].train.stages',
+                        );
+                      }
+                    }}
+                  />
+                </FormGroup>
+              </div>
             </div>
+            {stages.length > 0 && (
+              <div className="pt-4">
+                {stages.map((stage, i) => (
+                  <div key={i} className="p-4 mb-3 rounded bg-gray-900 border border-gray-700">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      <TextInput
+                        label="Stage Name"
+                        value={stage.name || ''}
+                        onChange={value => setJobConfig(value, `config.process[0].train.stages[${i}].name`)}
+                        placeholder={`stage_${i + 1}`}
+                      />
+                      <NumberInput
+                        label="Stage Steps"
+                        value={stage.steps ?? 1}
+                        onChange={value => setJobConfig(value, `config.process[0].train.stages[${i}].steps`)}
+                        min={1}
+                      />
+                      <NumberInput
+                        label="Stage LR"
+                        value={stage.lr ?? jobConfig.config.process[0].train.lr}
+                        onChange={value => setJobConfig(value, `config.process[0].train.stages[${i}].lr`)}
+                        min={0}
+                      />
+                      <NumberInput
+                        label="Stage Weight Decay"
+                        value={stage.optimizer_params?.weight_decay ?? 0}
+                        onChange={value =>
+                          setJobConfig(value, `config.process[0].train.stages[${i}].optimizer_params.weight_decay`)
+                        }
+                        min={0}
+                      />
+                      <SelectInput
+                        label="Stage Scheduler"
+                        value={stage.lr_scheduler || 'constant'}
+                        onChange={value => setJobConfig(value, `config.process[0].train.stages[${i}].lr_scheduler`)}
+                        options={lrSchedulerOptions}
+                      />
+                      {stage.lr_scheduler === 'constant_with_warmup' && (
+                        <NumberInput
+                          label="Stage Warmup Steps"
+                          value={(stage.lr_scheduler_params?.num_warmup_steps as number) ?? 100}
+                          onChange={value =>
+                            setJobConfig(value, `config.process[0].train.stages[${i}].lr_scheduler_params.num_warmup_steps`)
+                          }
+                          min={0}
+                        />
+                      )}
+                      {stage.lr_scheduler === 'step' && (
+                        <>
+                          <NumberInput
+                            label="Stage Step Size"
+                            value={(stage.lr_scheduler_params?.step_size as number) ?? 100}
+                            onChange={value =>
+                              setJobConfig(value, `config.process[0].train.stages[${i}].lr_scheduler_params.step_size`)
+                            }
+                            min={1}
+                          />
+                          <NumberInput
+                            label="Stage Gamma"
+                            value={(stage.lr_scheduler_params?.gamma as number) ?? 0.5}
+                            onChange={value =>
+                              setJobConfig(value, `config.process[0].train.stages[${i}].lr_scheduler_params.gamma`)
+                            }
+                            min={0}
+                          />
+                        </>
+                      )}
+                      {stage.lr_scheduler === 'cosine' && (
+                        <NumberInput
+                          label="Stage Eta Min"
+                          value={(stage.lr_scheduler_params?.eta_min as number) ?? 0}
+                          onChange={value =>
+                            setJobConfig(value, `config.process[0].train.stages[${i}].lr_scheduler_params.eta_min`)
+                          }
+                          min={0}
+                        />
+                      )}
+                      {stage.lr_scheduler === 'cosine_with_restarts' && (
+                        <NumberInput
+                          label="Stage Restart Period (T0)"
+                          value={(stage.lr_scheduler_params?.T_0 as number) ?? 100}
+                          onChange={value =>
+                            setJobConfig(value, `config.process[0].train.stages[${i}].lr_scheduler_params.T_0`)
+                          }
+                          min={1}
+                        />
+                      )}
+                      {stage.lr_scheduler === 'linear' && (
+                        <NumberInput
+                          label="Stage end learning rate"
+                          value={
+                            (Number(stage.lr ?? jobConfig.config.process[0].train.lr) || 0) *
+                            (Number.isFinite(Number(stage.lr_scheduler_params?.end_factor))
+                              ? Number(stage.lr_scheduler_params?.end_factor)
+                              : 0)
+                          }
+                          onChange={value => {
+                            const base = Number(stage.lr ?? jobConfig.config.process[0].train.lr) || 1e-12;
+                            const endLr = Math.max(0, Number(value) || 0);
+                            const factor = base > 0 ? endLr / base : 0;
+                            setJobConfig(
+                              factor,
+                              `config.process[0].train.stages[${i}].lr_scheduler_params.end_factor`,
+                            );
+                          }}
+                          placeholder="eg. 0"
+                          min={0}
+                        />
+                      )}
+                      <TextAreaInput
+                        label="Stage Advanced Params (JSON)"
+                        value={JSON.stringify(stage.lr_scheduler_params || {}, null, 2)}
+                        onChange={value =>
+                          setJsonObjectOrIgnore(
+                            `config.process[0].train.stages[${i}].lr_scheduler_params`,
+                            value,
+                          )
+                        }
+                        placeholder='e.g. {"eta_min": 1e-6}'
+                        rows={4}
+                      />
+                      <NumberInput
+                        label="Max Grad Norm"
+                        value={stage.max_grad_norm ?? 1.0}
+                        onChange={value => setJobConfig(value, `config.process[0].train.stages[${i}].max_grad_norm`)}
+                        min={0}
+                      />
+                      {disableSections.includes('train.timestep_type') ? null : (
+                        <SelectInput
+                          label="Stage Timestep Type"
+                          value={
+                            stage.timestep_type ??
+                            jobConfig.config.process[0].train.timestep_type
+                          }
+                          disabled={disableSections.includes('train.timestep_type') || false}
+                          onChange={value =>
+                            setJobConfig(value, `config.process[0].train.stages[${i}].timestep_type`)
+                          }
+                          options={timestepTypeOptions}
+                        />
+                      )}
+                      <SelectInput
+                        label="Stage Timestep Bias"
+                        value={
+                          stage.content_or_style ??
+                          jobConfig.config.process[0].train.content_or_style
+                        }
+                        onChange={value =>
+                          setJobConfig(value, `config.process[0].train.stages[${i}].content_or_style`)
+                        }
+                        options={timestepBiasOptions}
+                      />
+                      <SelectInput
+                        label="Stage Reg Bias"
+                        className="md:col-span-2 lg:col-span-1"
+                        value={
+                          stage.content_or_style_reg ??
+                          jobConfig.config.process[0].train.content_or_style_reg ??
+                          jobConfig.config.process[0].train.content_or_style
+                        }
+                        onChange={value =>
+                          setJobConfig(value, `config.process[0].train.stages[${i}].content_or_style_reg`)
+                        }
+                        options={timestepBiasOptions}
+                      />
+                    </div>
+                    <div className="pt-3">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setJobConfig(
+                            stages.filter((_, idx) => idx !== i),
+                            'config.process[0].train.stages',
+                          )
+                        }
+                        className="px-3 py-1 bg-red-700 hover:bg-red-600 rounded text-sm"
+                      >
+                        Remove Stage
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  onClick={() =>
+                    setJobConfig(
+                      [
+                        ...stages,
+                        {
+                          name: `stage_${stages.length + 1}`,
+                          steps: 500,
+                          lr: jobConfig.config.process[0].train.lr,
+                          optimizer_params: {
+                            weight_decay: jobConfig.config.process[0].train.optimizer_params.weight_decay,
+                          },
+                          lr_scheduler: jobConfig.config.process[0].train.lr_scheduler || 'constant',
+                          lr_scheduler_params: {},
+                        },
+                      ],
+                      'config.process[0].train.stages',
+                    )
+                  }
+                  className="w-full px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors"
+                >
+                  Add Stage
+                </button>
+              </div>
+            )}
           </Card>
         </div>
         <div>

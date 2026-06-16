@@ -77,8 +77,14 @@ export const defaultJobConfig: JobConfig = {
           gradient_checkpointing: true,
           noise_scheduler: 'flowmatch',
           optimizer: 'adamw8bit',
+          lr_scheduler: 'constant',
           timestep_type: 'sigmoid',
           content_or_style: 'balanced',
+          content_or_style_reg: 'balanced',
+          attention_backend: 'native',
+          attention_backend_vae: 'native',
+          attention_backend_text_encoder: 'native',
+          stages: [],
           optimizer_params: {
             weight_decay: 1e-4,
           },
@@ -98,6 +104,9 @@ export const defaultJobConfig: JobConfig = {
           diff_output_preservation_class: 'person',
           switch_boundary_every: 1,
           loss_type: 'mse',
+          log_grad_norm_stats: false,
+          grad_norm_log_every: 1,
+          grad_norm_log_percentiles: [],
         },
         logging: {
           log_every: 1,
@@ -163,6 +172,19 @@ export const migrateJobConfig = (jobConfig: JobConfig): JobConfig => {
   if (isMac()) {
     jobConfig.config.process[0].device = 'mps';
   }
+
+  const train = jobConfig.config.process[0].train as any;
+  if (!('attention_backend' in train)) train.attention_backend = 'native';
+  if (!('attention_backend_vae' in train)) train.attention_backend_vae = 'native';
+  if (!('attention_backend_text_encoder' in train)) train.attention_backend_text_encoder = 'native';
+  if (!Array.isArray(train.stages)) train.stages = [];
+  if (!('lr_scheduler' in train)) train.lr_scheduler = 'constant';
+  if (!('content_or_style_reg' in train)) {
+    train.content_or_style_reg = train.content_or_style ?? 'balanced';
+  }
+  if (!('log_grad_norm_stats' in train)) train.log_grad_norm_stats = false;
+  if (!('grad_norm_log_every' in train)) train.grad_norm_log_every = 1;
+  if (!Array.isArray(train.grad_norm_log_percentiles)) train.grad_norm_log_percentiles = [];
 
   return jobConfig;
 };

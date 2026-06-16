@@ -118,6 +118,7 @@ export interface EMAConfig {
 }
 
 export interface TrainConfig {
+  stages?: TrainStageConfig[];
   batch_size: number;
   bypass_guidance_embedding?: boolean;
   steps: number;
@@ -128,8 +129,14 @@ export interface TrainConfig {
   noise_scheduler: string;
   timestep_type: string;
   content_or_style: string;
+  content_or_style_reg?: string;
   optimizer: string;
   lr: number;
+  lr_scheduler?: string;
+  lr_scheduler_params?: Record<string, any>;
+  attention_backend?: string;
+  attention_backend_vae?: string;
+  attention_backend_text_encoder?: string;
   ema_config?: EMAConfig;
   dtype: string;
   unload_text_encoder: boolean;
@@ -151,6 +158,34 @@ export interface TrainConfig {
   differential_guidance_scale?: number;
   audio_loss_multiplier?: number;
   max_loss?: number | null;
+  /** When true, log grad norm stats to loss_log.db (off by default for performance). */
+  log_grad_norm_stats?: boolean;
+  /** Optimizer steps per GPU aggregate flush when log_grad_norm_stats and value > 1. */
+  grad_norm_log_every?: number;
+  /**
+   * Quantiles in [0, 1] (e.g. 0=min, 1=max) for pre/post grad norm within each GPU bucket when
+   * grad_norm_log_every > 1. Logged as grad_norm_pre_q0000000 … (7-digit suffix = round(q×1e6)) and grad_norm_post_q….
+   */
+  grad_norm_log_percentiles?: number[];
+}
+
+export interface TrainStageConfig {
+  name?: string;
+  steps: number;
+  lr?: number;
+  optimizer_params?: {
+    weight_decay?: number;
+    [key: string]: any;
+  };
+  lr_scheduler?: string;
+  lr_scheduler_params?: Record<string, any>;
+  max_grad_norm?: number;
+  /** Inherits from train.timestep_type when omitted */
+  timestep_type?: string;
+  /** Inherits from train.content_or_style when omitted */
+  content_or_style?: string;
+  /** Inherits from train.content_or_style_reg when omitted */
+  content_or_style_reg?: string;
 }
 
 export interface QuantizeKwargsConfig {

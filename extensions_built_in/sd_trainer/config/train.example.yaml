@@ -40,9 +40,42 @@ config:
         batch_size: 4
         dtype: bf16
         xformers: true
+        # Attention backend defaults:
+        # - attention_backend applies to UNet/refiner only
+        # - VAE/text encoder remain unchanged unless explicitly set below
+        # attention_backend: "native" # e.g. native, flash, sage, sageattn3-blackwell
+        # attention_backend_vae: "native"
+        # attention_backend_text_encoder: "native"
         min_snr_gamma: 5.0
 #        skip_first_sample: true
         noise_offset: 0.0 # not needed for this
+        # log_grad_norm_stats: false   # true: log grad norms / bucket stats to loss_log.db (off by default)
+        # grad_norm_log_every: 1      # optimizer steps per GPU aggregate (1 = per-step scalars on CPU)
+        # Optional quantiles in [0,1] for each GPU bucket (only when grad_norm_log_every > 1). Example:
+        # grad_norm_log_percentiles: [0.0, 0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99, 1.0]
+        # Optional staged training. If set, total train.steps is computed
+        # from the sum of stage steps and stages are applied in order.
+        # stages:
+        #   - name: warmup
+        #     steps: 500
+        #     lr: 1e-5
+        #     optimizer_params:
+        #       weight_decay: 1e-4
+        #     lr_scheduler: "linear"
+        #     lr_scheduler_params:
+        #       start_factor: 0.1
+        #       end_factor: 0.0   # final LR = train.lr * end_factor (total_iters usually = train.steps)
+        #   - name: cosine_decay
+        #     steps: 2500
+        #     optimizer_params:
+        #       weight_decay: 1e-2
+        #     lr_scheduler: "cosine"
+        #     lr_scheduler_params:
+        #       eta_min: 1e-6
+        #     # Optional per-stage timestep sampling (inherits train.* when omitted):
+        #     # timestep_type: "linear"
+        #     # content_or_style: "content"   # balanced | content | style
+        #     # content_or_style_reg: "style"  # bias for is_reg batches
       model:
         # objective reality v2
         name_or_path: "https://civitai.com/models/128453?modelVersionId=142465"

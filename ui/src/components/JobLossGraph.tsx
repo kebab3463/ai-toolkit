@@ -1,8 +1,22 @@
 'use client';
 
 import { Job } from '@prisma/client';
+import type { JobConfig } from '@/types';
 import useJobLossLog, { LossPoint } from '@/hooks/useJobLossLog';
-import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
+import { useMemo, useState, useEffect, useCallback, useRef } from 'react';
+import {
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  CartesianGrid,
+  Legend,
+} from 'recharts';
+import { NumberInput } from '@/components/formInputs';
 import uPlot from 'uplot';
 import 'uplot/dist/uPlot.min.css';
 
@@ -122,6 +136,49 @@ function strokeForKey(key: string) {
   return PALETTE[hashToIndex(key, PALETTE.length)];
 }
 
+/** Matches Python: `f"{int(round(q * 1_000_000)):07d}"` for loss_log.db metric keys. */
+function gradNormQuantileSuffix(q: number): string {
+  return `${Math.round(q * 1e6).toString().padStart(7, '0')}`;
+}
+
+/** Extra bucket series from job config (grad_norm_log_percentiles). */
+function gradNormPercentileMetricCharts(
+  jobConfigStr: string | null,
+): { key: string; label: string; color: string }[] {
+  if (!jobConfigStr) return [];
+  try {
+    const jc = JSON.parse(jobConfigStr) as JobConfig;
+    const qs = jc?.config?.process?.[0]?.train?.grad_norm_log_percentiles;
+    if (!Array.isArray(qs)) return [];
+    const seenQ = new Set<string>();
+    const out: { key: string; label: string; color: string }[] = [];
+    for (const raw of qs) {
+      const q = Number(raw);
+      if (!Number.isFinite(q) || q < 0 || q > 1) continue;
+      const suf = gradNormQuantileSuffix(q);
+      if (seenQ.has(suf)) continue;
+      seenQ.add(suf);
+      const preKey = `grad_norm_pre_q${suf}`;
+      const postKey = `grad_norm_post_q${suf}`;
+      out.push({ key: preKey, label: `Grad pre q=${q}`, color: strokeForKey(preKey) });
+      out.push({ key: postKey, label: `Grad post q=${q}`, color: strokeForKey(postKey) });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/** Plot area alignment: same left Y width + right gutter on every chart so step x-lines line up vertically. */
+function chartMargins(showLrOnMain: boolean) {
+  const right = showLrOnMain ? 52 : 16;
+  return { top: 10, right, bottom: 10, left: 8 } as const;
+}
+
+const CHART_Y_AXIS_WIDTH = 72;
+const CHART_PLOT_LEFT_PX = 8 + CHART_Y_AXIS_WIDTH;
+
+// Returns a solid but duller/darker version of an rgba color string for the trend overlay.
 // Persisted, per-URL graph settings. Sliders + display toggles + which loss
 // series are visible. Zoom / highlighted window is intentionally NOT persisted.
 interface PersistedSettings {
@@ -148,8 +205,118 @@ function dulledColor(rgba: string): string {
   return `rgba(${r},${g},${b},1)`;
 }
 
+/** Optional training scalars stored in loss_log.db (see BaseSDTrainProcess / SDTrainer). */
+const AUX_METRIC_OPTIONS = [
+  { key: 'learning_rate', label: 'Learning rate', color: 'rgba(251,191,36,1)' },
+  { key: 'weight_decay', label: 'Weight decay', color: 'rgba(52,211,153,1)' },
+  { key: 'grad_norm_pre', label: 'Grad norm (before clip)', color: 'rgba(167,139,250,1)' },
+  { key: 'grad_norm_post', label: 'Grad norm (after clip)', color: 'rgba(96,165,250,1)' },
+] as const;
+
+/** Logged when train.grad_norm_log_every > 1 (GPU bucket flush). */
+const GRAD_AGG_METRIC_OPTIONS = [
+  { key: 'grad_norm_pre_mean', label: 'Grad pre mean (bucket)', color: 'rgba(167,139,250,1)' },
+  { key: 'grad_norm_pre_median', label: 'Grad pre median (bucket)', color: 'rgba(192,132,252,1)' },
+  { key: 'grad_norm_clip_pct', label: 'Grad clipped % (bucket)', color: 'rgba(248,113,113,1)' },
+  { key: 'grad_norm_post_mean', label: 'Grad post mean (bucket)', color: 'rgba(96,165,250,1)' },
+] as const;
+
+function formatAuxTooltipValue(key: string, v: number) {
+  if (!Number.isFinite(v)) return '';
+  if (key === 'learning_rate') return v.toExponential(2);
+  if (key === 'weight_decay') return v.toExponential(2);
+  if (key.includes('clip_pct')) return `${v.toFixed(2)}%`;
+  return formatNum(v);
+}
+
+function downsampleAuxPoints(
+  points: LossPoint[],
+  stride: number,
+): { step: number; value: number }[] {
+  const s = Math.max(1, stride | 0);
+  return points
+    .filter(p => p.value !== null && Number.isFinite(p.value as number))
+    .filter((_, i) => i % s === 0)
+    .map(p => ({ step: p.step, value: p.value as number }));
+}
+
+function alignGradNormPairs(pre: LossPoint[], post: LossPoint[]) {
+  const postByStep = new Map<number, number>();
+  for (const p of post) {
+    if (p.value !== null && Number.isFinite(p.value as number)) {
+      postByStep.set(p.step, p.value as number);
+    }
+  }
+  const out: { step: number; pre: number; post: number }[] = [];
+  for (const p of pre) {
+    if (p.value === null || !Number.isFinite(p.value as number)) continue;
+    if (!postByStep.has(p.step)) continue;
+    out.push({ step: p.step, pre: p.value as number, post: postByStep.get(p.step)! });
+  }
+  out.sort((a, b) => a.step - b.step);
+  return out;
+}
+
+function computeGradNormChunkStats(
+  pairs: { step: number; pre: number; post: number }[],
+  chunkSize: number,
+) {
+  if (pairs.length === 0) return [];
+  const c =
+    !chunkSize || chunkSize <= 0
+      ? pairs.length
+      : Math.max(1, Math.min(Math.floor(chunkSize), pairs.length));
+  const out: {
+    chunk: number;
+    stepStart: number;
+    stepEnd: number;
+    meanPre: number;
+    clipPct: number;
+  }[] = [];
+  for (let i = 0, chunk = 0; i < pairs.length; i += c, chunk++) {
+    const sl = pairs.slice(i, i + c);
+    const meanPre = sl.reduce((s, p) => s + p.pre, 0) / sl.length;
+    const clips = sl.filter(p => p.pre > p.post + 1e-9).length;
+    out.push({
+      chunk,
+      stepStart: sl[0].step,
+      stepEnd: sl[sl.length - 1].step,
+      meanPre,
+      clipPct: (100 * clips) / sl.length,
+    });
+  }
+  return out;
+}
+
 export default function JobLossGraph({ job }: Props) {
-  const { series, lossKeys, status, refreshLoss } = useJobLossLog(job.id, 2000);
+  const [showAuxLr, setShowAuxLr] = useState(false);
+  const [showAuxWd, setShowAuxWd] = useState(false);
+  const [showAuxGradPre, setShowAuxGradPre] = useState(false);
+  const [showAuxGradPost, setShowAuxGradPost] = useState(false);
+  const [showGradAgg, setShowGradAgg] = useState(false);
+  /** 0 = one chunk over all loaded per-step grad points (CPU stats). */
+  const [gradNormChunkSize, setGradNormChunkSize] = useState(0);
+
+  const gradPctCharts = useMemo(() => gradNormPercentileMetricCharts(job.job_config), [job.job_config]);
+
+  const extraMetricKeys = useMemo(() => {
+    const out: string[] = [];
+    if (showAuxLr) out.push('learning_rate');
+    if (showAuxWd) out.push('weight_decay');
+    if (showAuxGradPre) out.push('grad_norm_pre');
+    if (showAuxGradPost) out.push('grad_norm_post');
+    if (showGradAgg) {
+      for (const o of GRAD_AGG_METRIC_OPTIONS) {
+        out.push(o.key);
+      }
+      for (const o of gradPctCharts) {
+        out.push(o.key);
+      }
+    }
+    return out;
+  }, [showAuxLr, showAuxWd, showAuxGradPre, showAuxGradPost, showGradAgg, gradPctCharts]);
+
+  const { series, lossKeys, status, refreshLoss } = useJobLossLog(job.id, 2000, extraMetricKeys);
 
   // Controls
   const [useLogScale, setUseLogScale] = useState(false);
@@ -534,12 +701,21 @@ export default function JobLossGraph({ job }: Props) {
         </button>
       </div>
 
-      {/* Chart */}
-      <div className="px-4 pt-4 pb-4 flex-1 min-h-0 flex flex-col">
-        <div
-          className="bg-gray-950 rounded-lg border border-gray-800 relative select-none flex-1 min-h-0"
-          style={{ minHeight: 240 }}
-        >
+      {/* Loss chart; optional learning rate on a hidden-scale right axis */}
+      <div className="px-4 pt-4">
+        <div className="mb-3">
+          <h3 className="text-xs font-medium text-gray-200 uppercase tracking-wide">Loss</h3>
+          <p className="text-[11px] text-gray-500 mt-1">
+            Log Y, smoothing, and outlier clipping apply to loss only. When enabled below, learning rate is drawn on the same
+            chart with its own y-scale (min–max in view; no tick labels). Hover the curve for the exact value.
+          </p>
+        </div>
+        <div ref={chartWrapperRef} className="bg-gray-950 rounded-lg border border-gray-800 h-96 relative select-none">
+          {/* Drag selection overlay — positioned via refs, no re-renders */}
+          <div
+            ref={overlayRef}
+            style={{ display: 'none', position: 'absolute', top: 10, bottom: 10, pointerEvents: 'none', background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.4)', zIndex: 5 }}
+          />
           {!hasData ? (
             <div className="absolute inset-0 flex items-center justify-center text-sm text-gray-400">
               {status === 'error' ? 'Failed to load loss logs.' : 'Waiting for loss points...'}
@@ -561,6 +737,226 @@ export default function JobLossGraph({ job }: Props) {
             </>
           )}
         </div>
+      </div>
+
+      {/* Training scalars (except LR): same plot width as loss for aligned step x */}
+      <div className="px-4 pb-4 mt-6 pt-6 border-t border-gray-800">
+        <h3 className="text-xs font-medium text-gray-200 uppercase tracking-wide">Training metrics</h3>
+        <p className="text-[11px] text-gray-500 mt-1 mb-3">
+          Each metric has its own y-axis (not shared with loss or with each other). Margins match the loss chart so a vertical
+          line keeps the same training step. Use the Learning rate checkbox to overlay LR on the loss chart above.
+        </p>
+        <div className="flex flex-wrap gap-x-5 gap-y-2 mb-1">
+          <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              className="rounded border-gray-600 bg-gray-900 text-blue-500 focus:ring-blue-500/40"
+              checked={showAuxLr}
+              onChange={e => setShowAuxLr(e.target.checked)}
+            />
+            Learning rate
+          </label>
+          <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              className="rounded border-gray-600 bg-gray-900 text-blue-500 focus:ring-blue-500/40"
+              checked={showAuxWd}
+              onChange={e => setShowAuxWd(e.target.checked)}
+            />
+            Weight decay
+          </label>
+          <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              className="rounded border-gray-600 bg-gray-900 text-blue-500 focus:ring-blue-500/40"
+              checked={showAuxGradPre}
+              onChange={e => setShowAuxGradPre(e.target.checked)}
+            />
+            Grad norm (before clip)
+          </label>
+          <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              className="rounded border-gray-600 bg-gray-900 text-blue-500 focus:ring-blue-500/40"
+              checked={showAuxGradPost}
+              onChange={e => setShowAuxGradPost(e.target.checked)}
+            />
+            Grad norm (after clip)
+          </label>
+          <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              className="rounded border-gray-600 bg-gray-900 text-blue-500 focus:ring-blue-500/40"
+              checked={showGradAgg}
+              onChange={e => setShowGradAgg(e.target.checked)}
+            />
+            Grad bucket stats (GPU)
+          </label>
+        </div>
+        <p className="text-[11px] text-gray-500 mb-3">
+          Per-step grad norms are optional: enable Log grad norm statistics in the job Advanced tab. When grad norm log
+          every is greater than 1, the trainer buffers norms on the GPU and logs bucket statistics (means, clip %, and
+          optional quantiles from the Advanced bucket-quantiles field). Weight decay uses the first param group.
+        </p>
+
+        {showAuxGradPre && showAuxGradPost && gradNormPairs.length > 0 && (
+          <div className="mb-6 p-3 rounded-lg border border-gray-800 bg-gray-950/80">
+            <h4 className="text-xs font-medium text-gray-200 mb-1">Grad norm chunk statistics (CPU)</h4>
+            <p className="text-[11px] text-gray-500 mb-2">
+              For per-step grad logging (log every = 1). Chunk size 0 uses all loaded steps as one chunk. Larger values
+              split consecutive optimizer steps into chunks; mean and clipped % are computed on the CPU for each chunk.
+            </p>
+            <NumberInput
+              label="Chunk size (steps, 0 = all loaded)"
+              value={gradNormChunkSize}
+              onChange={value => setGradNormChunkSize(Math.max(0, Math.floor(Number(value) || 0)))}
+              min={0}
+              className="max-w-xs mb-3"
+            />
+            {gradChunkChartData.length === 0 ? null : (
+              <div className="grid grid-cols-1 gap-3">
+                <div className="h-40 flex flex-col border border-gray-800 rounded-md overflow-hidden bg-gray-900/40">
+                  <div className="text-[10px] text-gray-500 px-2 py-1 border-b border-gray-800 shrink-0">
+                    Mean pre-clip norm per chunk
+                  </div>
+                  <div className="flex-1 min-h-0">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={gradChunkChartData} margin={syncMargins}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                        <XAxis dataKey="chunk" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }} />
+                        <YAxis
+                          tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }}
+                          width={CHART_Y_AXIS_WIDTH}
+                        />
+                        <Tooltip
+                          contentStyle={{ background: 'rgba(17,24,39,0.96)', border: '1px solid #374151', fontSize: 11 }}
+                          formatter={(v: number | undefined) => [
+                            typeof v === 'number' && Number.isFinite(v) ? formatNum(v) : '',
+                            'mean',
+                          ]}
+                          labelFormatter={(label, payload) => {
+                            const row = payload?.[0]?.payload as
+                              | { stepStart?: number; stepEnd?: number }
+                              | undefined;
+                            return row?.stepStart != null && row?.stepEnd != null
+                              ? `steps ${row.stepStart}–${row.stepEnd}`
+                              : `chunk ${label}`;
+                          }}
+                        />
+                        <Bar dataKey="meanPre" fill="rgba(167,139,250,0.85)" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+                <div className="h-40 flex flex-col border border-gray-800 rounded-md overflow-hidden bg-gray-900/40">
+                  <div className="text-[10px] text-gray-500 px-2 py-1 border-b border-gray-800 shrink-0">
+                    Clipped % per chunk
+                  </div>
+                  <div className="flex-1 min-h-0">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={gradChunkChartData} margin={syncMargins}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                        <XAxis dataKey="chunk" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }} />
+                        <YAxis
+                          tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }}
+                          width={CHART_Y_AXIS_WIDTH}
+                          domain={[0, 100]}
+                        />
+                        <Tooltip
+                          contentStyle={{ background: 'rgba(17,24,39,0.96)', border: '1px solid #374151', fontSize: 11 }}
+                          formatter={(v: number | undefined) => [
+                            typeof v === 'number' && Number.isFinite(v) ? `${v.toFixed(2)}%` : '',
+                            'clipped',
+                          ]}
+                          labelFormatter={(label, payload) => {
+                            const row = payload?.[0]?.payload as
+                              | { stepStart?: number; stepEnd?: number }
+                              | undefined;
+                            return row?.stepStart != null && row?.stepEnd != null
+                              ? `steps ${row.stepStart}–${row.stepEnd}`
+                              : `chunk ${label}`;
+                          }}
+                        />
+                        <Bar dataKey="clipPct" fill="rgba(248,113,113,0.85)" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {auxChartsToShow.length > 0 && (
+          <div className="grid grid-cols-1 gap-4">
+            {auxChartsToShow.map(opt => {
+              const pts = downsampleAuxPoints(series[opt.key] ?? [], plotStride);
+              const hasAux = pts.length > 0;
+              return (
+                <div
+                  key={opt.key}
+                  className="bg-gray-950 rounded-lg border border-gray-800 overflow-hidden flex flex-col min-h-[220px]"
+                >
+                  <div className="px-3 py-2 border-b border-gray-800 bg-gray-900/80">
+                    <span className="text-xs font-medium text-gray-200">{opt.label}</span>
+                    <span className="block text-[10px] text-gray-500 mt-0.5">Own y-axis · step on x</span>
+                  </div>
+                  <div className="relative flex-1 h-52">
+                    {!hasAux ? (
+                      <div className="h-full w-full flex items-center justify-center text-xs text-gray-500">
+                        {status === 'success' ? 'No data for this metric yet.' : 'Loading…'}
+                      </div>
+                    ) : (
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={pts} margin={syncMargins}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                          <XAxis
+                            dataKey="step"
+                            tick={{ fill: 'rgba(255,255,255,0.45)', fontSize: 11 }}
+                            tickLine={{ stroke: 'rgba(255,255,255,0.12)' }}
+                            axisLine={{ stroke: 'rgba(255,255,255,0.12)' }}
+                            minTickGap={40}
+                          />
+                          <YAxis
+                            tick={{ fill: 'rgba(255,255,255,0.45)', fontSize: 11 }}
+                            tickLine={{ stroke: 'rgba(255,255,255,0.12)' }}
+                            axisLine={{ stroke: 'rgba(255,255,255,0.12)' }}
+                            width={CHART_Y_AXIS_WIDTH}
+                            tickFormatter={v => formatAuxTooltipValue(opt.key, Number(v))}
+                            domain={['auto', 'auto']}
+                          />
+                          <Tooltip
+                            contentStyle={{
+                              background: 'rgba(17,24,39,0.96)',
+                              border: '1px solid rgba(31,41,55,1)',
+                              borderRadius: 10,
+                              color: 'rgba(255,255,255,0.9)',
+                              fontSize: 12,
+                            }}
+                            labelFormatter={(step: number) => `step ${step}`}
+                            formatter={(value: number | undefined) => [
+                              formatAuxTooltipValue(opt.key, Number(value ?? NaN)),
+                              opt.label,
+                            ]}
+                          />
+                          <Line
+                            type="monotone"
+                            dataKey="value"
+                            name={opt.label}
+                            stroke={opt.color}
+                            strokeWidth={2}
+                            dot={false}
+                            isAnimationActive={false}
+                          />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Controls */}
