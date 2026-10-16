@@ -11,7 +11,7 @@ from toolkit.train_tools import get_torch_dtype
 
 from .loss import slider_tuple_loss
 from .manifest import SliderTuple
-from .members import MemberLatentCache, dump_tuple, load_member_image
+from .members import MemberLatentCache, dump_tuple, load_member_image, load_member_mask
 from .sampling import member_weights, sample_members, weighted_scale_sum
 from .scales import SliderDatasetOptions, apply_slider_scales, slider_options_by_config
 from .tuples import SliderTrainConfig, prepare_tuple_dataset
@@ -78,7 +78,7 @@ class SliderTupleTrainer(SDTrainer):
             f"({sum(len(t.trainable) for t in tuples)} trainable); {self.slider_config}"
         )
         if n_masks:
-            print_acc(f"slider_tuple: {n_masks} member masks are listed but not used yet (masked loss is M5/F3)")
+            print_acc(f"slider_tuple: masked loss on for {n_masks} members (unmasked members use weight 1)")
 
     def hook_before_train_loop(self):
         # before super() and before any batch is drawn, so dataloader workers
@@ -178,6 +178,7 @@ class SliderTupleTrainer(SDTrainer):
             batch=batch,
             train_config=self.train_config,
             backward_per_member=cfg.backward_per_member,
+            slot_masks=self.gather_member_masks(tuples, picks, batch),
         )
 
     def gather_member_latents(self, tuples: List[SliderTuple], picks: List[List[int]], batch) -> List[torch.Tensor]:
@@ -203,6 +204,23 @@ class SliderTupleTrainer(SDTrainer):
             for j, i in enumerate(p):
                 slots[j][b] = batch.latents[b] if i == 0 else next(cached)
         return [torch.stack([x.to(device, dtype=dtype) for x in slot]) for slot in slots]
+
+    def gather_member_masks(self, tuples: List[SliderTuple], picks: List[List[int]], batch) -> List[Optional[torch.Tensor]]:
+        """(B, 1, H, W) loss masks per slot, aligned with each member's crop;
+        members without a mask get ones, slots with no mask at all get None."""
+        slots = []
+        for j in range(len(picks[0])):
+            members = [(t.members[p[j]], item) for t, p, item in zip(tuples, picks, batch.file_items)]
+            if all(m.mask is None for m, _ in members):
+                slots.append(None)
+                continue
+            masks = [
+                load_member_mask(m.mask, item) if m.mask is not None
+                else torch.ones(1, item.crop_height, item.crop_width)
+                for m, item in members
+            ]
+            slots.append(torch.stack(masks))
+        return slots
 
     def dump_tuples(self, tuples, picks, batch):
         folder = os.path.join(self.save_root, "slider_debug")

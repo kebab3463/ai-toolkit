@@ -45,6 +45,31 @@ def load_member_image(path: str, file_item) -> Image.Image:
     ))
 
 
+def load_member_mask(path: str, file_item) -> torch.Tensor:
+    """(1, H, W) loss mask in [mask_min_value, 1], aligned with the member.
+
+    Mirrors upstream ``load_mask_image`` (RGB -> optional invert -> flips ->
+    grayscale -> bicubic resize -> crop -> mask_min_value floor) without its
+    random blur augmentation, so masks are deterministic."""
+    config = file_item.dataset_config
+    img = ImageOps.exif_transpose(Image.open(path)).convert("RGB")
+    if config.invert_mask:
+        img = ImageOps.invert(img)
+    if file_item.flip_x:
+        img = img.transpose(Image.FLIP_LEFT_RIGHT)
+    if file_item.flip_y:
+        img = img.transpose(Image.FLIP_TOP_BOTTOM)
+    img = img.convert("L").resize((file_item.scale_to_width, file_item.scale_to_height), Image.BICUBIC)
+    img = img.crop((
+        file_item.crop_x,
+        file_item.crop_y,
+        file_item.crop_x + file_item.crop_width,
+        file_item.crop_y + file_item.crop_height,
+    ))
+    mask = _to_tensor(img)
+    return config.mask_min_value + mask * (1.0 - config.mask_min_value)
+
+
 def load_member_tensor(path: str, file_item) -> torch.Tensor:
     """(3, H, W) in [-1, 1], matching the anchor's dataloader tensor."""
     return _to_tensor(load_member_image(path, file_item)) * 2 - 1

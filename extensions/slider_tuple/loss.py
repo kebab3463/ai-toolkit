@@ -6,14 +6,19 @@ For one batch of B tuples with m sampled members each, arranged in m slots
     L = mean_b sum_j w_bj * mean( (v_theta,s_bj(x_t^bj, c_b, t_b) - (eps_b - x^bj))^2 )
 
 with one shared noise eps_b and timestep t_b per tuple and the LoRA at
-multiplier s_bj. Two members at scales +w / -w with unit weights is exactly
+multiplier s_bj. Optional per-member loss masks M_bj (F3) multiply the
+squared error element-wise after being resized to the latent size the way
+SDTrainer builds mask_multiplier (nearest interpolate, expanded over
+channels) and normalized to mean 1 per member.
+
+Two members at scales +w / -w with unit weights and no masks is exactly
 upstream's ``polarity`` loss (toolkit/guidance.py get_guided_loss_polarity),
 whose code path this mirrors: same scheduler call, noising, conditioning,
 targets and summed (not averaged) member losses. Like polarity it runs the
 backward pass itself and returns a detached loss that still requires grad.
 """
 
-from typing import List, Sequence
+from typing import List, Optional, Sequence
 
 import torch
 
@@ -32,6 +37,17 @@ def _set_flow_timesteps(sd, train_config, latents):
     sd.noise_scheduler.set_train_timesteps(1000, device=sd.device_torch, timestep_type=timestep_type, latents=latents)
 
 
+def latent_loss_mask(mask: torch.Tensor, latents: torch.Tensor) -> torch.Tensor:
+    """(B, 1, H, W) pixel mask -> (B, C, h, w) weights with mean 1 per item."""
+    mask = mask.to(latents.device, dtype=torch.float32)
+    mask = torch.nn.functional.interpolate(mask, size=latents.shape[-2:])
+    mask = mask.expand(-1, latents.shape[1], -1, -1)
+    mean = mask.mean(dim=(1, 2, 3), keepdim=True)
+    if (mean <= 0).any():
+        raise ValueError("slider_tuple: a member's loss mask is zero everywhere")
+    return mask / mean
+
+
 def slider_tuple_loss(
     sd,
     slot_latents: Sequence[torch.Tensor],
@@ -44,10 +60,12 @@ def slider_tuple_loss(
     batch,
     train_config,
     backward_per_member: bool = False,
+    slot_masks: Optional[Sequence[Optional[torch.Tensor]]] = None,
 ) -> torch.Tensor:
     """slot_latents[j]: (B, ...) clean latents of slot j; slot_scales[j][b] and
     slot_weights[j][b]: LoRA multiplier and loss weight of tuple b's member in
-    slot j. Returns the detached total loss (backward already done)."""
+    slot j; slot_masks[j]: (B, 1, H, W) pixel loss masks for slot j, or None
+    for unmasked. Returns the detached total loss (backward already done)."""
     m = len(slot_latents)
     dtype = get_torch_dtype(sd.torch_dtype)
     device = sd.device_torch
@@ -64,6 +82,10 @@ def slider_tuple_loss(
             for x in latents
         ]
         weights = [torch.tensor(w, device=device, dtype=torch.float32) for w in slot_weights]
+        masks = [
+            None if slot_masks is None or slot_masks[j] is None else latent_loss_mask(slot_masks[j], latents[j])
+            for j in range(m)
+        ]
         sd.unet.train()
         sd.network.is_active = True
 
@@ -83,6 +105,8 @@ def slider_tuple_loss(
         total = 0.0
         for j, pred in zip(slots, torch.chunk(prediction, len(slots), dim=0)):
             mse = torch.nn.functional.mse_loss(pred.float(), targets[j].float(), reduction="none")
+            if masks[j] is not None:
+                mse = mse * masks[j]
             per_item = mse.mean(dim=list(range(1, mse.dim())))
             total = total + (weights[j] * per_item).mean()
         return total
