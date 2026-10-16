@@ -12,8 +12,7 @@
 #   .venv/bin/python run.py extensions/slider_tuple/configs/krea2_polarity_smoke.yaml
 # Watch VRAM in a second terminal:
 #   /usr/lib/wsl/lib/nvidia-smi --query-gpu=memory.used --format=csv -l 1
-# Report peak VRAM and s/step (printed every performance_log_every steps),
-# then repeat with model.quantize: false.
+# Report peak VRAM and s/step (printed every performance_log_every steps).
 ---
 job: extension
 config:
@@ -59,9 +58,8 @@ config:
         # also sets the VAE dtype; the float16 default breaks Krea 2 sample
         # decoding (bf16 latents into an fp16 VAE), see NOTES.md
         dtype: bf16
-        # fp8 run: true. Second M1 run: false (the bf16 DiT is ~24 GB and
-        # polarity runs two grad-carrying forwards, so this may OOM; if so,
-        # report that and try low_vram: true).
+        # fp8 is required on a 32 GB card: with quantize: false the bf16 DiT
+        # saturates VRAM, and low_vram: true makes steps take >5 min (M1).
         quantize: true
         qtype: "qfloat8"
         quantize_te: true

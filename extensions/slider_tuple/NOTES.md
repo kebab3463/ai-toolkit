@@ -94,3 +94,27 @@ Search by name.
   (`nvidia-smi` is not on `PATH` in WSL).
 - **LoRA per-sample multipliers** (`network_mixins.py` ~L824) accept a float,
   a list (one per batch item) or a tensor, as the handoff says.
+
+## Milestone results
+
+### M1: baseline polarity smoke test (2026-10-16, RTX 5090 32 GB)
+
+Config `configs/krea2_polarity_smoke.yaml`, 5 synthetic pairs from
+`scripts/make_smoke_pairs.py`, LoRA rank 16, 200 steps at 1024 px.
+
+| Run | Result |
+| --- | --- |
+| fp8 (`quantize` + `quantize_te`, qfloat8) | Completed 200 steps. ~6.3 s/step (from sample timestamps, sampling excluded). Peak VRAM: not yet recorded. |
+| bf16, `quantize: false` | **Fail.** VRAM saturates and no step completes in reasonable time. |
+| bf16, `quantize: false`, `low_vram: true` | **Fail.** Runs, but >5 min/step; unusable. |
+
+Samples (same seed, `--m -1/0/1`): identical at step 0; at step 200 `m=0`
+still matches the base render while `m=-1` and `m=1` move in opposite
+directions. With these synthetic pairs the LoRA mostly picks up clothing
+differences rather than body shape, as expected when identity and outfit
+details are not held fixed across a pair. Plumbing confirmed; no quality
+claim.
+
+Consequences: fp8 quantization is mandatory for Krea 2 slider training on
+32 GB, and each extra grad-carrying member per step costs VRAM, so
+`slider_backward_per_member` (F2) matters for k > 2.
