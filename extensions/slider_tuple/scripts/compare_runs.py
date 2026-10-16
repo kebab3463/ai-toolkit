@@ -248,6 +248,9 @@ def main():
         r = abs(la - lb) / max(abs(la), abs(lb), 1e-12)
         rel.append(r)
         print(f"{s:>5} {la:>28.6f} {lb:>28.6f} {r:>9.2%}")
+    for r in (a, b):
+        vals = [r["losses"][s] for s in steps]
+        print(f"{r['name']}: mean loss {statistics.mean(vals):.6f}, median {statistics.median(vals):.6f}")
     worst = max(rel)
     verdict = "MATCH" if worst <= args.rtol else "DIFFER"
     print(f"\n{verdict}: max per-step relative difference {worst:.2%} over {len(steps)} steps (rtol {args.rtol:.0%})")
