@@ -14,18 +14,28 @@ Process-level options live in a ``slider:`` block:
       zero_sum_weights: false      # weights with sum(w_i * s_i) = 0 per step
       backward_per_member: false   # one forward/backward per member (flat memory)
       debug_dump_steps: 0          # dump crop-aligned members for the first N steps
+      # anchor preservation (F4, anchors.py); off while anchor_strength is 0
+      anchor_strength: 0.0
+      anchor_prompts: []           # prompts the slider must leave unchanged
+      anchor_prob: 1.0             # chance per step of adding the anchor loss
+      anchor_max_multiplier: 1.0   # LoRA multiplier drawn from [-max, max]
+      anchor_images: null          # folder of anchor images; default: the batch's latents
 """
 
 import json
+import math
 import os
-from dataclasses import dataclass
-from typing import Dict, List
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
 
 from .manifest import SliderTuple, load_manifest
 from .sampling import MembersPerStep, validate_members_per_step
 from .scales import normalize_scales
 
-SLIDER_TRAIN_KEYS = {"members_per_step", "force_opposite_signs", "zero_sum_weights", "backward_per_member", "debug_dump_steps"}
+SLIDER_TRAIN_KEYS = {
+    "members_per_step", "force_opposite_signs", "zero_sum_weights", "backward_per_member", "debug_dump_steps",
+    "anchor_strength", "anchor_prompts", "anchor_prob", "anchor_max_multiplier", "anchor_images",
+}
 
 
 @dataclass
@@ -35,6 +45,15 @@ class SliderTrainConfig:
     zero_sum_weights: bool = False
     backward_per_member: bool = False
     debug_dump_steps: int = 0
+    anchor_strength: float = 0.0
+    anchor_prompts: List[str] = field(default_factory=list)
+    anchor_prob: float = 1.0
+    anchor_max_multiplier: float = 1.0
+    anchor_images: Optional[str] = None
+
+    @property
+    def anchors_enabled(self) -> bool:
+        return self.anchor_strength > 0
 
     @classmethod
     def from_raw(cls, raw: dict) -> "SliderTrainConfig":
@@ -45,13 +64,35 @@ class SliderTrainConfig:
         debug = raw.get("debug_dump_steps", 0)
         if isinstance(debug, bool) or not isinstance(debug, int) or debug < 0:
             raise ValueError(f"slider.debug_dump_steps must be an integer >= 0, got {debug!r}")
-        return cls(
+        def number(key, default):
+            value = raw.get(key, default)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                raise ValueError(f"slider.{key} must be a number, got {value!r}")
+            return float(value)
+
+        config = cls(
             members_per_step=validate_members_per_step(raw.get("members_per_step", 2)),
             force_opposite_signs=bool(raw.get("force_opposite_signs", False)),
             zero_sum_weights=bool(raw.get("zero_sum_weights", False)),
             backward_per_member=bool(raw.get("backward_per_member", False)),
             debug_dump_steps=debug,
+            anchor_strength=number("anchor_strength", 0.0),
+            anchor_prompts=list(raw.get("anchor_prompts") or []),
+            anchor_prob=number("anchor_prob", 1.0),
+            anchor_max_multiplier=number("anchor_max_multiplier", 1.0),
+            anchor_images=raw.get("anchor_images"),
         )
+        if config.anchor_strength < 0:
+            raise ValueError("slider.anchor_strength must be >= 0")
+        if not 0.0 <= config.anchor_prob <= 1.0:
+            raise ValueError("slider.anchor_prob must be in [0, 1]")
+        if config.anchor_max_multiplier < 0:
+            raise ValueError("slider.anchor_max_multiplier must be >= 0")
+        if not all(isinstance(p, str) and p.strip() for p in config.anchor_prompts):
+            raise ValueError("slider.anchor_prompts must be a list of non-empty strings")
+        if config.anchors_enabled and not config.anchor_prompts:
+            raise ValueError("slider.anchor_strength > 0 needs anchor_prompts")
+        return config
 
 
 def check_tuple_dataset_config(config, where: str):

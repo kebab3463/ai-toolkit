@@ -1,7 +1,9 @@
 import os
+import random
 from typing import Dict, List, Optional
 
 import torch
+from PIL import Image, ImageOps
 
 from extensions_built_in.sd_trainer.SDTrainer import SDTrainer
 from toolkit.data_transfer_object.data_loader import DataLoaderBatchDTO
@@ -9,6 +11,7 @@ from toolkit.print import print_acc
 from toolkit.prompt_utils import PromptEmbeds
 from toolkit.train_tools import get_torch_dtype
 
+from .anchors import anchor_loss, center_crop_geometry, list_anchor_images
 from .loss import slider_tuple_loss
 from .manifest import SliderTuple
 from .members import MemberLatentCache, dump_tuple, load_member_image, load_member_mask
@@ -37,10 +40,18 @@ class SliderTupleTrainer(SDTrainer):
         self.slider_dataset_options: Dict[int, SliderDatasetOptions] = slider_options_by_config(
             self.get_conf("datasets", None) or [], self.dataset_configs
         )
-        self.slider_config = SliderTrainConfig.from_raw(self.get_conf("slider", None))
+        self.init_slider_state(SliderTrainConfig.from_raw(self.get_conf("slider", None)))
+        self.setup_tuple_datasets()
+        if self.slider_config.anchors_enabled and self.slider_config.anchor_images:
+            self.slider_anchor_images = list_anchor_images(self.slider_config.anchor_images)
+
+    def init_slider_state(self, slider_config: SliderTrainConfig):
+        self.slider_config = slider_config
         self.slider_tuples_by_anchor: Dict[str, SliderTuple] = {}
         self.slider_member_latents = MemberLatentCache()
-        self.setup_tuple_datasets()
+        self.slider_anchor_embeds = []
+        self.slider_anchor_images: List[str] = []
+        self.slider_anchor_latents = MemberLatentCache()
 
     def setup_tuple_datasets(self):
         tuple_configs = []
@@ -84,7 +95,21 @@ class SliderTupleTrainer(SDTrainer):
         # before super() and before any batch is drawn, so dataloader workers
         # (started lazily on first iteration) see the per-image weights
         self.apply_slider_scales()
+        # SDTrainer's hook may unload the text encoder (cache_text_embeddings), so encode first
+        self.encode_anchor_prompts()
         super().hook_before_train_loop()
+
+    def encode_anchor_prompts(self):
+        if not self.slider_config.anchors_enabled:
+            return
+        with torch.no_grad():
+            self.sd.text_encoder_to(self.device_torch)
+            self.slider_anchor_embeds = [
+                self.encode_static_prompt(prompt).to(self.device_torch, dtype=self.sd.torch_dtype).detach()
+                for prompt in self.slider_config.anchor_prompts
+            ]
+        source = f"{len(self.slider_anchor_images)} anchor images" if self.slider_anchor_images else "the batch latents"
+        print_acc(f"slider_tuple: anchor loss on {len(self.slider_anchor_embeds)} prompts over {source}")
 
     def apply_slider_scales(self):
         for loader in (self.data_loader, self.data_loader_reg):
@@ -166,7 +191,7 @@ class SliderTupleTrainer(SDTrainer):
         if self.step_num < cfg.debug_dump_steps:
             self.dump_tuples(tuples, picks, batch)
 
-        return slider_tuple_loss(
+        loss = slider_tuple_loss(
             self.sd,
             slot_latents=slot_latents,
             slot_scales=slot_scales,
@@ -180,6 +205,48 @@ class SliderTupleTrainer(SDTrainer):
             backward_per_member=cfg.backward_per_member,
             slot_masks=self.gather_member_masks(tuples, picks, batch),
         )
+        if cfg.anchors_enabled and random.random() < cfg.anchor_prob:
+            loss = self.add_anchor_loss(loss, batch, noise, timesteps, pred_kwargs)
+        return loss
+
+    def add_anchor_loss(self, loss, batch, noise, timesteps, pred_kwargs):
+        cfg = self.slider_config
+        n = len(batch.file_items)
+        weighted, mse = anchor_loss(
+            self.sd,
+            latents=self.anchor_latents(batch),
+            noise=noise,
+            timesteps=timesteps,
+            anchor_embeds=[random.choice(self.slider_anchor_embeds) for _ in range(n)],
+            multipliers=[random.uniform(-cfg.anchor_max_multiplier, cfg.anchor_max_multiplier) for _ in range(n)],
+            strength=cfg.anchor_strength,
+            pred_kwargs=pred_kwargs,
+            batch=batch,
+        )
+        self.additional_logs["slider/anchor_loss"] = mse
+        total = (loss.detach() + weighted).detach()
+        total.requires_grad_(True)
+        return total
+
+    def anchor_latents(self, batch) -> torch.Tensor:
+        """The batch's own latents, or a random anchor image per item, center-cropped
+        to that item's size (cached like member latents)."""
+        if not self.slider_anchor_images:
+            return batch.latents
+        dtype = get_torch_dtype(self.train_config.dtype)
+        requests = []
+        for item in batch.file_items:
+            path = random.choice(self.slider_anchor_images)
+            with Image.open(path) as img:
+                size = ImageOps.exif_transpose(img).size  # the loader applies EXIF rotation first
+            requests.append((path, center_crop_geometry(size, (item.crop_width, item.crop_height))))
+
+        def encode(pixels):
+            with torch.no_grad():
+                return self.sd.encode_images(pixels.to(self.device_torch, dtype=dtype))
+
+        latents = self.slider_anchor_latents.get(requests, encode)
+        return torch.stack([x.to(self.device_torch, dtype=dtype) for x in latents])
 
     def gather_member_latents(self, tuples: List[SliderTuple], picks: List[List[int]], batch) -> List[torch.Tensor]:
         """(B, ...) latents per slot: the anchor's from the batch (upstream cached
