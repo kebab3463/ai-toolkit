@@ -11,11 +11,12 @@ dependencies = [
     "controlnet-aux==0.0.10",
     "diffusers",
     "einops>=0.8.2",
+    "fastapi>=0.115",
     "flatten-json>=0.1.14",
     "gradio>=6.18.0",
     "hf-transfer>=0.1.9",
     "hf-xet>=1.5.1",
-    "huggingface-hub==1.10.1",
+    "huggingface-hub==1.23.0",
     "invisible-watermark>=0.2.0",
     "k-diffusion>=0.1.1.post1",
     "kornia>=0.8.3",
@@ -40,17 +41,18 @@ dependencies = [
     "pyyaml>=6.0.3",
     "safetensors>=0.8.0",
     "sentencepiece>=0.2.1",
-    "setuptools==69.5.1",
+    "setuptools>=77.0.3",
     "tensorboard>=2.20.0",
     "timm==1.0.22",
     "toml>=0.10.2",
-    "torch>=2.12.0",
+    "torch==2.13.0",
     "torchao==0.10.0",
-    "torchaudio>=2.11.0",
-    "torchcodec==0.9.1",
-    "torchvision>=0.27.0",
+    "torchaudio==2.11.0",
+    "torchcodec==0.15.0",
+    "torchvision==0.28.0",
     "transformers==5.5.3",
     "triton>=3.7.0",
+    "uvicorn>=0.30",
     "wheel>=0.47.0",
 ]
 
@@ -77,4 +79,4 @@ triton = [{ index = "pytorch-cuda", marker = "sys_platform == 'linux' and platfo
 torch = [{ index = "pytorch-cuda", marker = "sys_platform == 'linux' and platform_machine != 'aarch64'" },]
 torchvision = [{ index = "pytorch-cuda", marker = "sys_platform == 'linux' and platform_machine != 'aarch64'" },]
 torchaudio = [{ index = "pytorch-cuda", marker = "sys_platform == 'linux' and platform_machine != 'aarch64'" },]
-diffusers = { git = "https://github.com/huggingface/diffusers.git", rev = "dc8d9032171c83741fd37ed2b12bc9d8274464f3" }
+diffusers = { git = "https://github.com/huggingface/diffusers.git", rev = "c943837899b16cbae2f619b8dd4f7bb6f07dd81a" }
