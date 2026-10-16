@@ -66,10 +66,12 @@ config:
         # also sets the VAE dtype; the float16 default breaks Krea 2 sample
         # decoding (bf16 latents into an fp16 VAE), see NOTES.md
         dtype: bf16
-        # fp8 is required on a 32 GB card: with quantize: false the bf16 DiT
+        # 8-bit is required on a 32 GB card: with quantize: false the bf16 DiT
         # saturates VRAM, and low_vram: true makes steps take >5 min (M1).
+        # convrot8 (= ComfyUI int8_convrot) beat qfloat8 on the DiT: 18% faster,
+        # 3.5 GiB less memory, half the layer error (NOTES.md).
         quantize: true
-        qtype: "qfloat8"
+        qtype: "convrot8"
         quantize_te: true
         qtype_te: "qfloat8"
         low_vram: false

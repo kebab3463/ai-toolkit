@@ -177,7 +177,8 @@ DiT `qtype` only (TE stays qfloat8), BigLove Raw, 1024 px, 20 steps,
 | | qfloat8 | convrot8 |
 | --- | --- | --- |
 | Median s/step | 5.57 | **4.54** (-18%) |
-| Torch peak allocated / reserved | TBD | TBD |
+| Torch peak allocated / reserved | 24.30 / 26.01 GiB | **20.83 / 23.50 GiB** |
+| Whole-GPU peak (nvidia-smi) | 25,651 MiB | 24,945 MiB |
 | Layer output error vs bf16, Gaussian input | 2.67% | **1.32%** |
 | Layer output error vs bf16, 8 outlier channels x30 | 2.67% | **1.48%** |
 
@@ -194,3 +195,7 @@ quantization path consumes the torch RNG. Both runs trained the same 256
 LoRA modules. Same-qtype comparisons (M2) do line up. Not chased further;
 fix it (e.g. reseed after model load) before relying on cross-qtype loss
 comparisons.
+
+**Decision:** both smoke configs now use `qtype: convrot8` for the DiT
+(faster, less memory, more accurate, and the same numerics as the
+deployed int8_convrot Turbo model).
