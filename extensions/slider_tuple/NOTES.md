@@ -334,4 +334,20 @@ anchors): real tuples per the handoff's dataset contract (15-20 to start),
 real per-member masks, and the user's anchor prompts. The comparison's
 LPIPS-on-anchor-prompts criterion needs the F6 sweep (M6).
 
-GPU smoke (masks + anchors on the synthetic pairs): pending.
+GPU smoke (`compare_runs.py`, `krea2_tuple_smoke_m5.yaml` vs the M4 tuple run,
+20 steps, `SEED=42`, placeholder band masks, 8 scene anchor prompts, strength 1):
+
+| | tuples | + masks + anchors |
+| --- | --- | --- |
+| Median s/step | 4.45 | 7.04 (+58%, the anchor's two extra forwards) |
+| Torch peak allocated / reserved | 20.82 / 23.50 GiB | 20.85 / 23.55 GiB |
+| Mean / median loss | 0.341 / 0.238 | 0.338 / 0.213 |
+
+The anchor draws prompts and multipliers from Python's `random`, so torch's
+noise/timestep stream stayed aligned with the tuple run (same step-2 spike,
+2.014 vs 2.020) and the 1-20% per-step differences are the masks and
+anchors themselves. `slider/anchor_loss` is logged every step at ~5e-5
+(0.03% of the total) and flat over 20 steps: a fresh LoRA barely moves
+anchor predictions yet, so the anchor has little to correct. Whether
+`anchor_strength` 1 is enough is for the full-length M5 comparison;
+`anchor_prob` < 1 trades preservation for speed. Plumbing **passes**.
