@@ -685,6 +685,15 @@ class TrainConfig:
             TrainStageConfig(**stage) for stage in stages_raw
         ]
 
+        # will throw detailed error when it goes over
+        self.max_loss_debug: bool = kwargs.get("max_loss_debug", False)
+        # will clip the loss to this amount to prevent wild outliers
+        self.max_loss: Optional[float] = kwargs.get("max_loss", None)
+        self.validation_config: Optional[ValidationConfig] = None
+        validation = kwargs.get('validation_config', None)
+        if validation is not None:
+            self.validation_config: ValidationConfig = ValidationConfig(**validation)
+
 
 class TrainStageConfig:
     def __init__(self, **kwargs):
@@ -702,15 +711,6 @@ class TrainStageConfig:
         self.content_or_style_reg: Optional[ContentOrStyleType] = kwargs.get(
             "content_or_style_reg", None
         )
-
-        # will throw detailed error when it goes over
-        self.max_loss_debug: bool = kwargs.get("max_loss_debug", False)
-        # will clip the loss to this amount to prevent wild outliers
-        self.max_loss: Optional[float] = kwargs.get("max_loss", None)
-        self.validation_config: Optional[ValidationConfig] = None
-        validation = kwargs.get('validation_config', None)
-        if validation is not None:
-            self.validation_config: ValidationConfig = ValidationConfig(**validation)
 
 
 ModelArch = Literal['sd1', 'sd2', 'sd3', 'sdxl', 'pixart', 'pixart_sigma', 'auraflow', 'flux', 'flex1', 'flex2', 'lumina2', 'vega', 'ssd', 'wan21', 'anima']
