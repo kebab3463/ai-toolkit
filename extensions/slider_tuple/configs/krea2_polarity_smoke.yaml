@@ -57,7 +57,11 @@ config:
         lr: 1e-4
         dtype: bf16
       model:
-        name_or_path: "krea/Krea-2-Raw"
+        # BigLove Krea Life 2 (fine-tune of Krea 2 Raw): a folder holding one
+        # bf16 DiT checkpoint in the same format as krea/Krea-2-Raw (identical
+        # keys and shapes). The text encoder and VAE still load from their
+        # default repos. Use "krea/Krea-2-Raw" for the official base model.
+        name_or_path: "models/BigLoveKreaLife2_raw_AI-Toolkit"
         arch: "krea2"
         # also sets the VAE dtype; the float16 default breaks Krea 2 sample
         # decoding (bf16 latents into an fp16 VAE), see NOTES.md

@@ -95,6 +95,26 @@ Search by name.
 - **LoRA per-sample multipliers** (`network_mixins.py` ~L824) accept a float,
   a list (one per batch item) or a tensor, as the handoff says.
 
+## Base model: BigLove Krea Life 2 fine-tune
+
+From M2 on, configs train on `models/BigLoveKreaLife2_raw_AI-Toolkit` (a
+fine-tune of Krea 2 Raw; `/models` is gitignored) instead of `krea/Krea-2-Raw`.
+
+- Format check against the official `raw.safetensors` header: the same 430
+  tensors, names and shapes, so the stock Krea 2 loader reads it directly
+  (folder path, single `.safetensors` inside). Only the transformer is
+  replaced; Qwen3-VL and the Qwen-Image VAE still load from their defaults.
+- The fine-tune stores all tensors in bf16, while the official checkpoint
+  keeps 174 small tensors (norm scales, modulation, `tmlp`) in fp32. No
+  practical difference: Krea 2 uses the default `aitk_cast_on_load`, which
+  casts everything to the load dtype (bf16) for both checkpoints.
+- M1's 200-step run used the official Raw checkpoint, and the smoke pairs
+  were rendered with it; that is fine for plumbing checks.
+- **For F7 (Turbo previews):** a Raw->Turbo delta LoRA extracted from the
+  official checkpoints is only an approximation on top of this fine-tune.
+  Check how far `fine-tune + delta` is from a Turbo-like render before
+  relying on it; there is no "BigLove Turbo" to compare against.
+
 ## Milestone results
 
 ### M1: baseline polarity smoke test (2026-10-16, RTX 5090 32 GB)
