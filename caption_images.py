@@ -168,8 +168,8 @@ def main():
     )
     parser.add_argument(
         "--model",
-        default="local-model",
-        help='Model identifier shown in LMStudio (default: "local-model").',
+        default="qwen3-vl-32b-instruct-heretic-v2-iq5ks",
+        help='Model identifier shown in LMStudio (default: "qwen3-vl-32b-instruct").',
     )
     parser.add_argument(
         "--skip-existing",
@@ -237,18 +237,22 @@ def main():
 
         ok = skipped = failed = 0
 
+        captions = []
+
         for i, img_path in enumerate(images, 1):
             txt_path = img_path.with_suffix(".txt")
             prefix = f"[{i}/{total}] {img_path.name}"
 
             if args.skip_existing and txt_path.exists():
                 print(f"{prefix} — skipped (already captioned)")
+                captions.append(txt_path.read_text(encoding="utf-8"))
                 skipped += 1
                 continue
 
             print(f"{prefix} ...", end=" ", flush=True)
             try:
                 caption = caption_image(client, args.model, img_path, args.max_size)
+                captions.append(caption)
                 txt_path.write_text(caption, encoding="utf-8")
                 print("done")
                 ok += 1
@@ -257,9 +261,17 @@ def main():
                 failed += 1
 
         print(f"\nCaptioning finished. {ok} captioned, {skipped} skipped, {failed} failed.")
+        dataset_name = args.folder.name
+        with open(f"datasets/{dataset_name}_captions.txt", "w") as f:
+            for i,caption in enumerate(captions):
+                f.write(caption)
+                if i < len(captions) - 1:
+                    f.write("\n\n")
+
 
     # ── Normalization pass ────────────────────────────────────────────────────
     if args.canonical:
+        normalized_captions = []
         txt_files = sorted(
             img.with_suffix(".txt") for img in images
             if img.with_suffix(".txt").exists()
@@ -278,6 +290,7 @@ def main():
                 try:
                     original = txt_path.read_text(encoding="utf-8")
                     normalized = normalize_caption(client, args.model, original, args.canonical)
+                    normalized_captions.append(normalized)
                     txt_path.write_text(normalized, encoding="utf-8")
                     print("done")
                     ok += 1
@@ -286,6 +299,12 @@ def main():
                     failed += 1
 
             print(f"\nNormalization finished. {ok} updated, {failed} failed.")
+        dataset_name = args.folder.name
+        with open(f"datasets/{dataset_name}_captions_normalized.txt", "w") as f:
+            for i,caption in enumerate(normalized_captions):
+                f.write(caption)
+                if i < len(normalized_captions) - 1:
+                    f.write("\n\n")
 
 
 if __name__ == "__main__":
