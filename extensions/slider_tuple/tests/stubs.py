@@ -63,6 +63,12 @@ class StubModel:
     def condition_noisy_latents(self, latents, batch):
         return latents
 
+    def encode_images(self, pixels, device=None, dtype=None):
+        # stand-in VAE: 8x average pooling, padded from 3 to the model's channels
+        x = torch.nn.functional.avg_pool2d(pixels.float(), 8)
+        pad = self.base.in_channels - x.shape[1]
+        return torch.cat([x, x[:, :1].expand(-1, pad, -1, -1)], dim=1) if pad > 0 else x
+
     def _multiplier_tensor(self, batch_size: int) -> torch.Tensor:
         m = self.network.multiplier if self.network.is_active else 0.0
         if isinstance(m, (int, float)):
@@ -91,7 +97,7 @@ def make_batch(
 
 
 def make_train_config(timestep_type: str = "linear"):
-    return SimpleNamespace(linear_timesteps=False, linear_timesteps2=False, timestep_type=timestep_type)
+    return SimpleNamespace(linear_timesteps=False, linear_timesteps2=False, timestep_type=timestep_type, dtype="fp32")
 
 
 def make_embeds(batch_size: int, tokens: int = 3, dim: int = 8, seed: int = 0) -> PromptEmbeds:

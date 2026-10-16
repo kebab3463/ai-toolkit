@@ -1,11 +1,10 @@
 """M2: the slider_tuple trainer registers as an extension and leaves upstream guidance untouched."""
 
-import pytest
 import torch
 
 from extensions_built_in.sd_trainer.SDTrainer import SDTrainer
 from extensions.slider_tuple import AI_TOOLKIT_EXTENSIONS
-from extensions.slider_tuple.SliderTupleTrainer import SLIDER_GUIDANCE_TYPES, SliderTupleTrainer
+from extensions.slider_tuple.SliderTupleTrainer import SliderTupleTrainer
 from toolkit.guidance import get_guided_loss_polarity
 
 from .stubs import StubModel, make_batch, make_embeds, make_pair, make_train_config
@@ -69,20 +68,3 @@ def test_polarity_delegates_to_upstream_unchanged():
     # upstream contract: backward already ran, returned loss is detached but marked as requiring grad
     assert loss.requires_grad and loss.grad_fn is None
     assert sd.network.multiplier == [0.7, 0.7, -0.7, -0.7]
-
-
-@pytest.mark.parametrize("guidance_type", SLIDER_GUIDANCE_TYPES)
-def test_slider_guidance_types_are_reserved(guidance_type):
-    after, before, noise, timesteps = make_pair()
-    trainer = make_trainer(StubModel())
-    with pytest.raises(NotImplementedError, match=guidance_type):
-        trainer.get_guided_loss(
-            noisy_latents=None,
-            conditional_embeds=make_embeds(after.shape[0]),
-            match_adapter_assist=False,
-            network_weight_list=[1.0, 1.0],
-            timesteps=timesteps,
-            pred_kwargs={},
-            batch=make_batch(after, None, guidance_type=guidance_type),
-            noise=noise,
-        )
