@@ -8,7 +8,7 @@ import pytest
 import torch
 from PIL import Image
 
-from extensions.slider_tuple.members import MemberLatentCache, load_member_tensor
+from extensions.slider_tuple.members import load_member_tensor
 from extensions.slider_tuple.scales import slider_options_by_config
 from extensions.slider_tuple.SliderTupleTrainer import SliderTupleTrainer
 from extensions.slider_tuple.tuples import SliderTrainConfig
@@ -46,9 +46,7 @@ def make_trainer(tmp_path, manifest, slider=None, extra_raw=None):
     trainer = SliderTupleTrainer.__new__(SliderTupleTrainer)
     trainer.dataset_configs = [config]
     trainer.slider_dataset_options = slider_options_by_config([raw], [config])
-    trainer.slider_config = SliderTrainConfig.from_raw(slider)
-    trainer.slider_tuples_by_anchor = {}
-    trainer.slider_member_latents = MemberLatentCache()
+    trainer.init_slider_state(SliderTrainConfig.from_raw(slider))
     trainer.save_root = str(tmp_path / "run")
     trainer.do_guided_loss = False
     trainer.setup_tuple_datasets()
@@ -176,8 +174,7 @@ def test_rejects_mixed_and_misconfigured_datasets(tmp_path):
     trainer = SliderTupleTrainer.__new__(SliderTupleTrainer)
     trainer.dataset_configs = configs
     trainer.slider_dataset_options = slider_options_by_config([raw_tuples, raw_plain], configs)
-    trainer.slider_config = SliderTrainConfig()
-    trainer.slider_tuples_by_anchor = {}
+    trainer.init_slider_state(SliderTrainConfig())
     trainer.save_root = str(tmp_path / "run")
     with pytest.raises(ValueError, match="cannot be mixed"):
         trainer.setup_tuple_datasets()
