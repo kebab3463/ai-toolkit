@@ -9,7 +9,7 @@
 # the same size and framing; before/ images are cropped exactly like after/.
 #
 # Run (from the repo root):
-#   .venv/bin/python run.py extensions/slider_tuple/configs/krea2_polarity_smoke.yaml
+#   SEED=42 .venv/bin/python run.py extensions/slider_tuple/configs/krea2_polarity_smoke.yaml
 # Watch VRAM in a second terminal:
 #   /usr/lib/wsl/lib/nvidia-smi --query-gpu=memory.used --format=csv -l 1
 # Report peak VRAM and s/step (printed every performance_log_every steps).
@@ -22,6 +22,10 @@ config:
       training_folder: "output"
       device: cuda:0
       performance_log_every: 10
+      # per-step loss to <run folder>/loss_log.db, for comparing M1 and M2
+      logging:
+        log_every: 1
+        use_ui_logger: true
       network:
         type: "lora"
         linear: 16
