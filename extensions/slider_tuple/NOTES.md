@@ -168,3 +168,29 @@ is whole-GPU (allocator pool plus any other GPU users under WSL), and WSL's
 nvidia-smi cannot report per-process memory. `compare_runs.py` now also
 records torch's in-process `max_memory_allocated` / `max_memory_reserved`. (The CPU test already shows the
 override is bit-identical to upstream `polarity` on a stub model.)
+
+### Training quantization A/B: qfloat8 vs convrot8 (2026-10-16)
+
+DiT `qtype` only (TE stays qfloat8), BigLove Raw, 1024 px, 20 steps,
+`SEED=42`, via `compare_runs.py --set-b model.qtype=convrot8`.
+
+| | qfloat8 | convrot8 |
+| --- | --- | --- |
+| Median s/step | 5.57 | **4.54** (-18%) |
+| Torch peak allocated / reserved | TBD | TBD |
+| Layer output error vs bf16, Gaussian input | 2.67% | **1.32%** |
+| Layer output error vs bf16, 8 outlier channels x30 | 2.67% | **1.48%** |
+
+Layer error: mean relative output error over 9 real BigLove layers
+(blocks 0 and 14, attention `wq`/`wo` and MLP `up`/`gate`/`down`), 4096
+tokens, each quantized with `toolkit.util.quantize.quantize_module`.
+convrot8 also quantizes activations (W8A8) yet halves the error; qfloat8
+is weight-only and bounded by fp8's 3 mantissa bits.
+
+**Per-step losses are not comparable across qtypes.** Even with `SEED=42`
+the two runs drew different noise/timesteps (step-1 loss 0.273 vs 0.098,
+where the zero-initialized LoRA cannot be the cause), so something on one
+quantization path consumes the torch RNG. Both runs trained the same 256
+LoRA modules. Same-qtype comparisons (M2) do line up. Not chased further;
+fix it (e.g. reseed after model load) before relying on cross-qtype loss
+comparisons.
