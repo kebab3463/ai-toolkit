@@ -149,3 +149,18 @@ claim.
 Consequences: fp8 quantization is mandatory for Krea 2 slider training on
 32 GB, and each extra grad-carrying member per step costs VRAM, so
 `slider_backward_per_member` (F2) matters for k > 2.
+
+### M2: slider_tuple trainer reproduces sd_trainer (2026-10-16)
+
+`scripts/compare_runs.py` on the two smoke configs (BigLove Krea Life 2 Raw,
+fp8 qfloat8 DiT + TE, 1024 px, `SEED=42`, 20 steps, sampling off).
+
+| | `sd_trainer` | `slider_tuple_trainer` |
+| --- | --- | --- |
+| Median s/step | 5.55 | 5.59 |
+| Peak GPU memory | TBD | TBD |
+
+Per-step `loss/loss` agrees within 0.00–0.07% over all 19 logged steps,
+including the same high-timestep spike at step 19 (1.0994 vs 1.0994); the
+residual is GPU nondeterminism. **Pass.** (The CPU test already shows the
+override is bit-identical to upstream `polarity` on a stub model.)
