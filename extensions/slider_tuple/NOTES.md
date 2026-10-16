@@ -199,3 +199,32 @@ comparisons.
 **Decision:** both smoke configs now use `qtype: convrot8` for the DiT
 (faster, less memory, more accurate, and the same numerics as the
 deployed int8_convrot Turbo model).
+
+### M3: per-image slider scales (F1) (2026-10-16)
+
+Dataset keys (`slider_tuple_trainer` only, default off):
+
+```yaml
+datasets:
+  - folder_path: /data/tuples
+    slider_scales: true             # read per-image scales
+    slider_scale_normalize: max_abs # optional: divide by the largest |scale|
+```
+
+Per image, first match wins: `<stem>.scale` next to the image (one float),
+then `scales.json` in `folder_path` (`{"<stem>": float}`), then the
+dataset's `network_weight`. Sidecar and `scales.json` must agree where both
+define a stem. With `polarity`, an image's scale `s` trains the LoRA at `+s`
+on it and `-s` on its `unconditional_path` partner.
+
+Implemented without touching upstream: the trainer pairs the raw dataset
+dicts with `self.dataset_configs` (same split, same order) and sets
+`FileItemDTO.network_weight` before the first batch. For M8, the generic
+part (sidecar/`scales.json` lookup into `network_weight`) could move into
+`FileItemDTO`/`DatasetConfig` as a small upstream PR.
+
+Verified (CPU, `tests/test_scales.py`): batch multipliers from
+`DataLoaderBatchDTO.get_network_weight_list()` equal the sidecar values
+through the real dataloader, including with a worker process; missing
+sidecars fall back without error. **Accepted.** No GPU run needed until
+tuples (M4).
