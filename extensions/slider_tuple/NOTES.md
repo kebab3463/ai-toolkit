@@ -301,3 +301,37 @@ person and the renders' own background variation). Same cost as polarity
 CPU equivalence tests plus this GPU smoke run; an exact fixed-input check on
 the real model (both losses on one batch, noise and timestep) is possible if
 stronger GPU evidence is wanted.
+
+### M5: masked loss (F3) and anchor preservation (F4) (2026-10-16)
+
+**F3, masks.** Per-member `"mask"` in `tuples.jsonl` (grayscale, same size as
+the image: ~1 body, 0 head, 0.1-0.3 background). Masks follow the anchor's
+flip/resize/crop and the dataset's `invert_mask` / `mask_min_value` like
+upstream `load_mask_image` (without its random blur), are resized to the
+latent the way SDTrainer builds `mask_multiplier`, and are normalized to
+mean 1 **per member** (upstream normalizes over the whole batch; per member
+keeps each member's loss scale independent of the others' mask coverage).
+
+Upstream patch (separate commit, upstreamable): `polarity` now honors
+`mask_multiplier`; the unconditional image reuses the conditional image's
+mask (same stem and framing). A separate partner mask would need dataloader
+changes; tuple datasets already support one mask per member.
+
+**F4, anchors.** `slider:` keys `anchor_strength` (0 = off), `anchor_prompts`,
+`anchor_prob`, `anchor_max_multiplier`, `anchor_images`. Anchor prompts are
+encoded before SDTrainer unloads the text encoder; the anchor loss uses the
+step's noise and full-range timesteps, its own backward, and logs
+`slider/anchor_loss` (unweighted MSE).
+
+CPU verification (100 tests): all-ones mask == unmasked; changing latents
+under a zero mask region leaves the LoRA gradient unchanged (and does change
+it without the mask), for both slider_tuple and patched polarity; member
+masks equal upstream `load_mask_image`; the anchor target is the LoRA-off
+prediction and the anchor loss falls under gradient descent.
+
+**Data the three-way comparison needs** (tuples only / + masks / + masks +
+anchors): real tuples per the handoff's dataset contract (15-20 to start),
+real per-member masks, and the user's anchor prompts. The comparison's
+LPIPS-on-anchor-prompts criterion needs the F6 sweep (M6).
+
+GPU smoke (masks + anchors on the synthetic pairs): pending.
