@@ -158,9 +158,13 @@ fp8 qfloat8 DiT + TE, 1024 px, `SEED=42`, 20 steps, sampling off).
 | | `sd_trainer` | `slider_tuple_trainer` |
 | --- | --- | --- |
 | Median s/step | 5.55 | 5.59 |
-| Peak GPU memory | TBD | TBD |
+| Peak GPU memory (whole GPU, nvidia-smi) | 25,651 MiB | 27,485 MiB |
 
 Per-step `loss/loss` agrees within 0.00–0.07% over all 19 logged steps,
 including the same high-timestep spike at step 19 (1.0994 vs 1.0994); the
-residual is GPU nondeterminism. **Pass.** (The CPU test already shows the
+residual is GPU nondeterminism. **Pass.** The 1.8 GB memory gap is not
+attributable to the trainer (it only delegates on this path): `memory.used`
+is whole-GPU (allocator pool plus any other GPU users under WSL), and WSL's
+nvidia-smi cannot report per-process memory. `compare_runs.py` now also
+records torch's in-process `max_memory_allocated` / `max_memory_reserved`. (The CPU test already shows the
 override is bit-identical to upstream `polarity` on a stub model.)

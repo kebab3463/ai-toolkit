@@ -41,6 +41,22 @@ sys.path.insert(0, REPO_ROOT)
 
 NVIDIA_SMI_CANDIDATES = ["/usr/lib/wsl/lib/nvidia-smi", "nvidia-smi"]
 
+# Runs run.py unchanged and, at interpreter exit, writes torch's own peak CUDA
+# memory counters to the JSON path in AITK_CMP_MEM_OUT. nvidia-smi under WSL
+# cannot attribute memory to a process, so this is the per-run number.
+RUN_WRAPPER = """
+import atexit, json, os, runpy, sys
+def _dump():
+    import torch
+    if torch.cuda.is_available():
+        with open(os.environ["AITK_CMP_MEM_OUT"], "w") as f:
+            json.dump({"max_allocated": torch.cuda.max_memory_allocated(),
+                       "max_reserved": torch.cuda.max_memory_reserved()}, f)
+atexit.register(_dump)
+sys.argv = sys.argv[1:]
+runpy.run_path(sys.argv[0], run_name="__main__")
+"""
+
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -155,7 +171,7 @@ def run_one(config_path: str, suffix: str, overrides, args) -> dict:
         if len(losses) >= args.steps - 1:
             print(f"\n=== {config['config']['name']}: reusing existing run ({len(losses)} logged steps) ===", flush=True)
             return {"name": config["config"]["name"], "losses": losses, "s_per_step": s_per_step,
-                    "peak_mib": None, "idle_mib": None, "wall_s": 0.0}
+                    "peak_mib": None, "idle_mib": None, "torch_mem": None, "wall_s": 0.0}
     if os.path.exists(folder):
         if not args.overwrite:
             raise SystemExit(f"{folder} exists; pass --overwrite to replace it")
@@ -167,14 +183,24 @@ def run_one(config_path: str, suffix: str, overrides, args) -> dict:
 
     extra = f", overrides {list(overrides)}" if overrides else ""
     print(f"\n=== {config['config']['name']}: {args.steps} steps, SEED={args.seed}{extra} ===", flush=True)
-    env = {**os.environ, "SEED": str(args.seed)}
+    mem_out = tmp_path + ".mem.json"
+    env = {**os.environ, "SEED": str(args.seed), "AITK_CMP_MEM_OUT": mem_out}
     start = time.time()
     try:
         with VramPoller() as vram:
             idle = vram.read()
-            result = subprocess.run([sys.executable, os.path.join(REPO_ROOT, "run.py"), tmp_path], cwd=REPO_ROOT, env=env)
+            result = subprocess.run(
+                [sys.executable, "-c", RUN_WRAPPER, os.path.join(REPO_ROOT, "run.py"), tmp_path],
+                cwd=REPO_ROOT, env=env,
+            )
+        torch_mem = None
+        if os.path.exists(mem_out):
+            with open(mem_out) as f:
+                torch_mem = json.load(f)
     finally:
         os.unlink(tmp_path)
+        if os.path.exists(mem_out):
+            os.unlink(mem_out)
     if result.returncode != 0:
         raise SystemExit(f"run failed for {config_path} (exit {result.returncode})")
 
@@ -185,6 +211,7 @@ def run_one(config_path: str, suffix: str, overrides, args) -> dict:
         "s_per_step": s_per_step,
         "peak_mib": vram.peak_mib,
         "idle_mib": idle,
+        "torch_mem": torch_mem,
         "wall_s": time.time() - start,
     }
 
@@ -204,7 +231,11 @@ def main():
         if r["peak_mib"] is None:
             mem = "peak GPU memory n/a (reused run)"
         else:
-            mem = f"peak GPU memory {r['peak_mib']} MiB (idle before start {r['idle_mib']} MiB)"
+            mem = f"whole-GPU peak {r['peak_mib']} MiB (idle before start {r['idle_mib']} MiB)"
+            if r["torch_mem"]:
+                gib = 1024 ** 3
+                mem = (f"torch peak allocated {r['torch_mem']['max_allocated'] / gib:.2f} GiB, "
+                       f"reserved {r['torch_mem']['max_reserved'] / gib:.2f} GiB; " + mem)
         print(f"{r['name']}: {sps} s/step (median), {mem}, wall {r['wall_s'] / 60:.1f} min")
 
     steps = sorted(set(a["losses"]) & set(b["losses"]))
