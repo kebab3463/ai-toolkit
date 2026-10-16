@@ -1,0 +1,84 @@
+# M1 baseline smoke test: upstream image-pair slider (guidance_type: polarity)
+# on Krea 2 Raw, using the stock sd_trainer. No slider_tuple code involved.
+#
+# Data layout (4-6 synthetic pairs, identical stems in both folders):
+#   <root>/after/   pair_01.png  pair_01.txt  ...   LoRA trained at +network_weight
+#   <root>/before/  pair_01.png               ...   LoRA trained at -network_weight
+# Both members of a pair share the caption in after/<stem>.txt and must have
+# the same size and framing; before/ images are cropped exactly like after/.
+#
+# Run (from the repo root):
+#   .venv/bin/python run.py extensions/slider_tuple/configs/krea2_polarity_smoke.yaml
+# Watch VRAM in a second terminal:
+#   /usr/lib/wsl/lib/nvidia-smi --query-gpu=memory.used --format=csv -l 1
+# Report peak VRAM and s/step (printed every performance_log_every steps),
+# then repeat with model.quantize: false.
+---
+job: extension
+config:
+  name: "krea2_polarity_smoke"
+  process:
+    - type: "sd_trainer"
+      training_folder: "output"
+      device: cuda:0
+      performance_log_every: 10
+      network:
+        type: "lora"
+        linear: 16
+        linear_alpha: 16
+      save:
+        dtype: float16
+        save_every: 200
+        max_step_saves_to_keep: 2
+      datasets:
+        - folder_path: "/path/to/slider_smoke/after"
+          unconditional_path: "/path/to/slider_smoke/before"
+          guidance_type: "polarity"
+          network_weight: 1.0
+          caption_ext: "txt"
+          caption_dropout_rate: 0.0
+          cache_latents_to_disk: true
+          resolution: [1024]
+      train:
+        batch_size: 1
+        steps: 200
+        gradient_accumulation: 1
+        train_unet: true
+        train_text_encoder: false
+        cache_text_embeddings: true
+        gradient_checkpointing: true
+        noise_scheduler: "flowmatch"
+        timestep_type: "linear" # UI default for Krea 2
+        optimizer: "adamw8bit"
+        lr: 1e-4
+        dtype: bf16
+      model:
+        name_or_path: "krea/Krea-2-Raw"
+        arch: "krea2"
+        # fp8 run: true. Second M1 run: false (the bf16 DiT is ~24 GB and
+        # polarity runs two grad-carrying forwards, so this may OOM; if so,
+        # report that and try low_vram: true).
+        quantize: true
+        qtype: "qfloat8"
+        quantize_te: true
+        qtype_te: "qfloat8"
+        low_vram: false
+      sample:
+        sampler: "flowmatch"
+        sample_every: 100
+        width: 1024
+        height: 1024
+        # same prompt and seed at three LoRA strengths; walk_seed off so the
+        # three images differ only by multiplier
+        prompts:
+          - "photo of a person standing in a park, full body --m -1"
+          - "photo of a person standing in a park, full body --m 0"
+          - "photo of a person standing in a park, full body --m 1"
+        neg: ""
+        seed: 42
+        walk_seed: false
+        guidance_scale: 4
+        sample_steps: 25
+meta:
+  name: "[name]"
+  version: "1.0"
