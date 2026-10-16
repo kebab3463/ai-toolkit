@@ -228,3 +228,57 @@ Verified (CPU, `tests/test_scales.py`): batch multipliers from
 through the real dataloader, including with a worker process; missing
 sidecars fall back without error. **Accepted.** No GPU run needed until
 tuples (M4).
+
+### M4: tuple datasets and `guidance_type: slider_tuple` (F2) (2026-10-16)
+
+Usage (see `tuples.py` / `manifest.py` docstrings for every key):
+
+```yaml
+      datasets:
+        - slider_tuples: datasets/tuples/tuples.jsonl
+          guidance_type: slider_tuple
+          resolution: [1024]
+          cache_latents_to_disk: true
+      slider:
+        members_per_step: 2          # or "all"
+        force_opposite_signs: false
+        zero_sum_weights: false
+        backward_per_member: false
+        debug_dump_steps: 0
+```
+
+How it works: each tuple's first member (the anchor) becomes a dataloader item
+via a generated JSON dataset (`<run>/slider_tuple/dataset_<i>.json`, the
+`{path: {"caption": ...}}` format upstream reads), so upstream buckets, crops,
+flips and caches latents and text embeddings for it. At loss time the trainer
+loads the other members through the anchor file item's own resize/crop/flip
+path and caches their latents in memory per crop. Members are sampled per
+step, ordered by descending scale, and arranged in slots so a +/- pair is
+polarity's `[positive, negative]` batch.
+
+Design notes and deviations:
+
+- **VAE latents are sampled, not the mean.** `QwenImageVAE.encode_images`
+  uses `latent_dist.sample()`. Member latents are encoded once and cached,
+  like upstream's own latent cache does for anchors; polarity instead
+  re-encodes its partner every step. Consequence: GPU loss curves cannot match
+  polarity step for step (polarity consumes the RNG before noise/timesteps).
+- **Batch members per step.** All tuples in a batch train the same number of
+  members: `min(members_per_step, trainable count)` over the batch.
+- **Restrictions (v1):** tuple datasets cannot be mixed with other datasets
+  or be `is_reg`; they need buckets; augmentations, `alpha_mask`, video and an
+  explicit `folder_path` / `dataset_path` are rejected. Manifest masks are
+  parsed but unused until M5.
+- **Upstream oddity:** `FileItemDTO.__init__` sets `flip_y` from the
+  `flip_x` kwarg (`data_transfer_object/data_loader.py`). Members copy
+  whatever flips the anchor file item ends up with, so they stay aligned
+  either way. Candidate one-line upstream fix (M8).
+
+CPU verification (80 tests): a +/-1 tuple run through the real dataloader and
+the trainer equals `get_guided_loss_polarity` in loss and LoRA gradient on the
+same pair, noise and timestep (batch 1 and 2); members load bit-identical to
+upstream's image path for every flip combination; zero-sum weights give
+`sum(w*s) = 0` (e.g. -0.6/+1.4 -> 1.4/0.6) and zero LoRA gradient for
+identical-image tuples; per-member backward equals the single forward.
+
+GPU check: pending (`compare_runs.py` polarity vs `krea2_tuple_smoke.yaml`).
