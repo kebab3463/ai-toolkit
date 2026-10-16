@@ -29,19 +29,28 @@ NORMALIZE_MODES = ("none", "max_abs")
 class SliderDatasetOptions:
     scales: bool = False
     normalize: str = "none"
+    tuples: Optional[str] = None  # tuples.jsonl manifest (guidance_type: slider_tuple)
 
     @classmethod
     def from_raw(cls, raw: dict) -> "SliderDatasetOptions":
         options = cls(
             scales=bool(raw.get("slider_scales", False)),
             normalize=str(raw.get("slider_scale_normalize", "none")),
+            tuples=raw.get("slider_tuples"),
         )
         if options.normalize not in NORMALIZE_MODES:
             raise ValueError(
                 f"slider_scale_normalize must be one of {NORMALIZE_MODES}, got {options.normalize!r}"
             )
-        if options.normalize != "none" and not options.scales:
-            raise ValueError("slider_scale_normalize requires slider_scales: true")
+        if options.normalize != "none" and not (options.scales or options.tuples):
+            raise ValueError("slider_scale_normalize requires slider_scales: true or slider_tuples")
+        is_tuple_guidance = raw.get("guidance_type") == "slider_tuple"
+        if options.tuples is not None and not is_tuple_guidance:
+            raise ValueError("slider_tuples requires guidance_type: slider_tuple")
+        if is_tuple_guidance and options.tuples is None:
+            raise ValueError("guidance_type: slider_tuple requires slider_tuples (a tuples.jsonl manifest)")
+        if options.tuples is not None and options.scales:
+            raise ValueError("slider_scales does not apply to tuple datasets; scales come from the manifest")
         return options
 
 
