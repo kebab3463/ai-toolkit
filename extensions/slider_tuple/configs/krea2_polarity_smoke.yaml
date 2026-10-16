@@ -1,9 +1,10 @@
 # M1 baseline smoke test: upstream image-pair slider (guidance_type: polarity)
 # on Krea 2 Raw, using the stock sd_trainer. No slider_tuple code involved.
 #
-# Data layout (4-6 synthetic pairs, identical stems in both folders):
-#   <root>/after/   pair_01.png  pair_01.txt  ...   LoRA trained at +network_weight
-#   <root>/before/  pair_01.png               ...   LoRA trained at -network_weight
+# Data layout (4-6 synthetic pairs, identical stems in both folders), as written by
+# extensions/slider_tuple/scripts/make_smoke_pairs.py:
+#   datasets/slider_smoke/after/   pair_01.png  pair_01.txt  ...   LoRA at +network_weight
+#   datasets/slider_smoke/before/  pair_01.png               ...   LoRA at -network_weight
 # Both members of a pair share the caption in after/<stem>.txt and must have
 # the same size and framing; before/ images are cropped exactly like after/.
 #
@@ -31,8 +32,8 @@ config:
         save_every: 200
         max_step_saves_to_keep: 2
       datasets:
-        - folder_path: "/path/to/slider_smoke/after"
-          unconditional_path: "/path/to/slider_smoke/before"
+        - folder_path: "datasets/slider_smoke/after"
+          unconditional_path: "datasets/slider_smoke/before"
           guidance_type: "polarity"
           network_weight: 1.0
           caption_ext: "txt"

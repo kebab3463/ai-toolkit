@@ -23,8 +23,8 @@ config:
         save_every: 200
         max_step_saves_to_keep: 2
       datasets:
-        - folder_path: "/path/to/slider_smoke/after"
-          unconditional_path: "/path/to/slider_smoke/before"
+        - folder_path: "datasets/slider_smoke/after"
+          unconditional_path: "datasets/slider_smoke/before"
           guidance_type: "polarity"
           network_weight: 1.0
           caption_ext: "txt"
