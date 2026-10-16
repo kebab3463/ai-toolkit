@@ -47,6 +47,9 @@ config:
       model:
         name_or_path: "krea/Krea-2-Raw"
         arch: "krea2"
+        # also sets the VAE dtype; the float16 default breaks Krea 2 sample
+        # decoding (bf16 latents into an fp16 VAE), see NOTES.md
+        dtype: bf16
         # fp8 run: true. Second M1 run: false (the bf16 DiT is ~24 GB and
         # polarity runs two grad-carrying forwards, so this may OOM; if so,
         # report that and try low_vram: true).

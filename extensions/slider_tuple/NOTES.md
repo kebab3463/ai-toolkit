@@ -78,6 +78,16 @@ Search by name.
   `quantize` + `quantize_te`, `low_vram`, CFG 4. The Turbo preset samples
   with **9** steps and CFG 1 (the handoff says 8; Krea's own guidance should
   decide F6/F7 defaults).
+- **Krea 2 needs `model.dtype: bf16` (upstream bug).** `ModelConfig.dtype`
+  defaults to `float16` and `vae_dtype` follows it, while the trainer builds
+  the model with `train.dtype` (bf16). The Krea 2 pipeline then calls
+  `decode_latents(..., dtype=model.torch_dtype)`, which casts latents to bf16
+  and feeds them to the fp16 VAE: `RuntimeError: Input type (BFloat16) and
+  bias type (Half)`. Reproduced on `0d19b26` at the first decode. The UI's job
+  defaults don't set `model.dtype` either. Workaround: set `model.dtype: bf16`
+  (all configs here do). Upstreamable fix: cast to `self.vae_torch_dtype` in
+  `toolkit/models/v2/vae/qwen_image.py` `decode_latents`, or pass it from the
+  pipeline. Candidate for M8.
 - **No peak-VRAM logging.** The trainer's `performance_log_every` reports
   timings only. For M1, watch VRAM with
   `/usr/lib/wsl/lib/nvidia-smi --query-gpu=memory.used --format=csv -l 1`
