@@ -179,6 +179,7 @@ cython_debug/
 !/output/.gitkeep
 /extensions/*
 !/extensions/example
+!/extensions/slider_tuple
 /temp
 /wandb
 .vscode/settings.json

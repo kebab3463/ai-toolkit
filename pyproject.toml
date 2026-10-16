@@ -54,6 +54,13 @@ dependencies = [
     "wheel>=0.47.0",
 ]
 
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+# repo root on sys.path so tests can import toolkit/ and extensions.*
+pythonpath = ["."]
+
 [tool.uv]
 no-build-isolation-package = []
 
