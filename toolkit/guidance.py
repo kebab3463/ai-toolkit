@@ -414,6 +414,7 @@ def get_guided_loss_polarity(
         sd: 'StableDiffusion',
         train_config: 'TrainConfig',
         scaler=None,
+        mask_multiplier=None,
         **kwargs
 ):
     dtype = get_torch_dtype(sd.torch_dtype)
@@ -500,6 +501,12 @@ def get_guided_loss_polarity(
         target_neg.float(),
         reduction="none"
     )
+
+    # slider_tuple: honor the loss mask (mask_path / alpha_mask). The unconditional
+    # image shares the conditional image's framing and stem, so it reuses its mask.
+    if mask_multiplier is not None:
+        pred_loss = pred_loss * mask_multiplier
+        pred_neg_loss = pred_neg_loss * mask_multiplier
 
     loss = pred_loss + pred_neg_loss
 
@@ -761,6 +768,7 @@ def get_guidance_loss(
             sd,
             scaler=scaler,
             train_config=train_config,
+            mask_multiplier=mask_multiplier,  # slider_tuple: was dropped
             **kwargs
         )
     elif guidance_type == "tnt":
