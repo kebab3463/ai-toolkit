@@ -108,3 +108,26 @@ def make_pair(batch_size: int = 2, channels: int = 4, size: int = 8, seed: int =
     noise = torch.randn(shape, generator=gen)
     timesteps = torch.randint(1, 1000, (batch_size,), generator=gen).float()
     return after, before, noise, timesteps
+
+
+class DataModelStub:
+    """The model attributes AiToolkitDataset / FileItemDTO read for a plain image
+    dataset (no caching, no controls), so the real dataloader runs on CPU."""
+
+    is_xl = is_vega = is_ssd = False
+    is_audio_model = is_multimodal_llm = False
+    encode_control_in_text_embeddings = encode_first_frame_in_text_embeddings = False
+    text_embedding_uses_target_size = use_raw_control_images = False
+    load_rgba = dopsd_self_ref = False
+    te_padding_side = "right"
+    vae = None
+    unet = None
+
+    def get_bucket_divisibility(self):
+        return 16
+
+    def get_latent_space_version(self):
+        return "sd1"
+
+    def get_text_embedding_space_version(self):
+        return "sd1"
