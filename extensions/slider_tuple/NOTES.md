@@ -281,4 +281,23 @@ upstream's image path for every flip combination; zero-sum weights give
 `sum(w*s) = 0` (e.g. -0.6/+1.4 -> 1.4/0.6) and zero LoRA gradient for
 identical-image tuples; per-member backward equals the single forward.
 
-GPU check: pending (`compare_runs.py` polarity vs `krea2_tuple_smoke.yaml`).
+GPU check (`compare_runs.py`, 20 steps, `SEED=42`, convrot8, BigLove Raw, same
+5 pairs; polarity side reused from the convrot8 A/B run):
+
+| | polarity (`sd_trainer`) | slider_tuple |
+| --- | --- | --- |
+| Median s/step | 4.54 | 4.45 |
+| Torch peak allocated / reserved | 20.83 / 23.50 GiB | 20.82 / 23.50 GiB |
+| Mean / median loss (19 steps) | 0.212 / 0.187 | 0.341 / 0.238 |
+| Same, without its one 2.01 step | | 0.248 / 0.208 |
+
+Per-step losses differ from step 1 (different noise/timesteps, see the VAE
+note above), so only the distributions are comparable. The mean gap comes from
+a single high-loss step; a permutation test finds no difference (p = 0.64 for
+medians, 0.23 for means; per-step SD 0.14-0.43). The step-0 debug dump shows
+the members crop-aligned (identical framing; differences confined to the
+person and the renders' own background variation). Same cost as polarity
+(member latents are encoded once instead of every step). **Accepted** on the
+CPU equivalence tests plus this GPU smoke run; an exact fixed-input check on
+the real model (both losses on one batch, noise and timestep) is possible if
+stronger GPU evidence is wanted.
