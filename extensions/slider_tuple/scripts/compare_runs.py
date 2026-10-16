@@ -13,7 +13,13 @@ Usage (from the repo root):
         extensions/slider_tuple/configs/krea2_polarity_smoke.yaml \\
         extensions/slider_tuple/configs/krea2_polarity_smoke_ext.yaml
 
-Run folders are output/<config name>_cmp; pass --overwrite to replace them.
+Same config with one setting changed (an A/B):
+    .venv/bin/python extensions/slider_tuple/scripts/compare_runs.py \\
+        extensions/slider_tuple/configs/krea2_polarity_smoke.yaml \\
+        extensions/slider_tuple/configs/krea2_polarity_smoke.yaml \\
+        --set-b model.qtype=convrot8 --suffix-b _convrot8
+
+Run folders are output/<config name><suffix>; pass --overwrite to replace them.
 """
 
 import argparse
@@ -42,9 +48,17 @@ def parse_args():
     p.add_argument("config_b")
     p.add_argument("--steps", type=int, default=20)
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--suffix", default="_cmp", help="appended to each config's name for its run folder")
+    p.add_argument("--suffix-a", default="_cmp", help="appended to config A's name for its run folder")
+    p.add_argument("--suffix-b", default="_cmp", help="appended to config B's name for its run folder")
+    p.add_argument("--set-a", action="append", default=[], metavar="KEY=VALUE",
+                   help="override in config A's process, dotted path (e.g. model.qtype=convrot8); repeatable")
+    p.add_argument("--set-b", action="append", default=[], metavar="KEY=VALUE",
+                   help="override in config B's process, dotted path; repeatable")
     p.add_argument("--rtol", type=float, default=0.02, help="max per-step relative loss difference to call a match")
     p.add_argument("--overwrite", action="store_true", help="delete existing run folders first")
+    p.add_argument("--reuse-existing", action="store_true",
+                   help="reuse a run folder whose loss_log.db already covers --steps instead of training again "
+                        "(its peak GPU memory is not known then)")
     return p.parse_args()
 
 
@@ -86,7 +100,18 @@ class VramPoller:
         self._thread.join()
 
 
-def make_short_config(path: str, steps: int, suffix: str) -> dict:
+def apply_override(process: dict, assignment: str):
+    key, sep, raw = assignment.partition("=")
+    if not sep:
+        raise SystemExit(f"override must be KEY=VALUE, got {assignment!r}")
+    *parents, leaf = key.split(".")
+    node = process
+    for part in parents:
+        node = node.setdefault(part, {})
+    node[leaf] = yaml.safe_load(raw)  # so 1e-4, true, 512 get their YAML types
+
+
+def make_short_config(path: str, steps: int, suffix: str, overrides=()) -> dict:
     from toolkit.config import get_config
 
     # round-trip through JSON to turn OrderedDicts into plain dicts for yaml.safe_dump
@@ -99,6 +124,8 @@ def make_short_config(path: str, steps: int, suffix: str) -> dict:
         process.setdefault("save", {})
         process["save"]["save_every"] = steps
         process["logging"] = {**process.get("logging", {}), "log_every": 1, "use_ui_logger": True}
+        for assignment in overrides:
+            apply_override(process, assignment)
     return config
 
 
@@ -120,9 +147,15 @@ def read_losses(folder: str):
     return losses, (statistics.median(step_times) if step_times else None)
 
 
-def run_one(config_path: str, args) -> dict:
-    config = make_short_config(config_path, args.steps, args.suffix)
+def run_one(config_path: str, suffix: str, overrides, args) -> dict:
+    config = make_short_config(config_path, args.steps, suffix, overrides)
     folder = run_folder(config)
+    if args.reuse_existing and os.path.exists(os.path.join(folder, "loss_log.db")):
+        losses, s_per_step = read_losses(folder)
+        if len(losses) >= args.steps - 1:
+            print(f"\n=== {config['config']['name']}: reusing existing run ({len(losses)} logged steps) ===", flush=True)
+            return {"name": config["config"]["name"], "losses": losses, "s_per_step": s_per_step,
+                    "peak_mib": None, "idle_mib": None, "wall_s": 0.0}
     if os.path.exists(folder):
         if not args.overwrite:
             raise SystemExit(f"{folder} exists; pass --overwrite to replace it")
@@ -132,7 +165,8 @@ def run_one(config_path: str, args) -> dict:
         yaml.safe_dump(config, f, sort_keys=False)
         tmp_path = f.name
 
-    print(f"\n=== {config['config']['name']}: {args.steps} steps, SEED={args.seed} ===", flush=True)
+    extra = f", overrides {list(overrides)}" if overrides else ""
+    print(f"\n=== {config['config']['name']}: {args.steps} steps, SEED={args.seed}{extra} ===", flush=True)
     env = {**os.environ, "SEED": str(args.seed)}
     start = time.time()
     try:
@@ -157,14 +191,21 @@ def run_one(config_path: str, args) -> dict:
 
 def main():
     args = parse_args()
-    a = run_one(args.config_a, args)
-    b = run_one(args.config_b, args)
+    names = [make_short_config(c, args.steps, sfx)["config"]["name"]
+             for c, sfx in ((args.config_a, args.suffix_a), (args.config_b, args.suffix_b))]
+    if names[0] == names[1]:
+        raise SystemExit(f"both runs would use output/{names[0]}; give them different --suffix-a/--suffix-b")
+    a = run_one(args.config_a, args.suffix_a, args.set_a, args)
+    b = run_one(args.config_b, args.suffix_b, args.set_b, args)
 
     print("\n=== summary ===")
     for r in (a, b):
         sps = f"{r['s_per_step']:.2f}" if r["s_per_step"] else "n/a"
-        print(f"{r['name']}: {sps} s/step (median), peak GPU memory {r['peak_mib']} MiB "
-              f"(idle before start {r['idle_mib']} MiB), wall {r['wall_s'] / 60:.1f} min")
+        if r["peak_mib"] is None:
+            mem = "peak GPU memory n/a (reused run)"
+        else:
+            mem = f"peak GPU memory {r['peak_mib']} MiB (idle before start {r['idle_mib']} MiB)"
+        print(f"{r['name']}: {sps} s/step (median), {mem}, wall {r['wall_s'] / 60:.1f} min")
 
     steps = sorted(set(a["losses"]) & set(b["losses"]))
     if not steps:
