@@ -110,10 +110,21 @@ fine-tune of Krea 2 Raw; `/models` is gitignored) instead of `krea/Krea-2-Raw`.
   casts everything to the load dtype (bf16) for both checkpoints.
 - M1's 200-step run used the official Raw checkpoint, and the smoke pairs
   were rendered with it; that is fine for plumbing checks.
-- **For F7 (Turbo previews):** a Raw->Turbo delta LoRA extracted from the
-  official checkpoints is only an approximation on top of this fine-tune.
-  Check how far `fine-tune + delta` is from a Turbo-like render before
-  relying on it; there is no "BigLove Turbo" to compare against.
+- **Deployment pairing.** The model author ships this checkpoint as the Raw
+  counterpart of the BigLoveKreaLife2 Turbo model, for training LoRAs that
+  are used on that Turbo model. The user deploys BigLoveKreaLife2 Turbo as an
+  int8_convrot quant, so the handoff's plan (train on Raw, judge on Turbo)
+  applies with BigLove Raw/Turbo in place of the official pair.
+- **For F7 (Turbo previews):** use the BigLove pair, not the official one.
+  Either extract a BigLove Raw->Turbo delta LoRA from the two checkpoints,
+  or (simpler, and exactly what is deployed) swap in the user's BigLove Turbo
+  int8_convrot file for sampling only. ai-toolkit can load ComfyUI
+  int8_convrot checkpoints (`toolkit/util/comfy_quant_import.py`; that format
+  is the toolkit's `convrot8` storage). Location of the Turbo file: TBD.
+- **Training quantization.** int8_convrot == `qtype: convrot8`, which trains
+  with a real int8 tensor-core forward (bit-identical to inference) and a
+  straight-through backward. Candidate replacement for `qfloat8` on the DiT,
+  pending a 20-step speed/VRAM A/B with `scripts/compare_runs.py`.
 
 ## Milestone results
 
