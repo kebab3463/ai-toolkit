@@ -1,0 +1,272 @@
+# slider_tuple: slider LoRAs for Krea 2 from image tuples
+
+Trains "slider" LoRAs (one attribute, controlled by LoRA strength) on Krea 2
+Raw from sets of images of the same person at different attribute levels,
+and judges them on the Turbo model they are deployed on. This file is the
+how-to for a new slider; `NOTES.md` is the development log (why things are
+the way they are, test results), and
+`docs/Handoff Tuple Slider Training for Krea 2 in an ai-toolkit Fork.md` the
+design.
+
+All commands run from the repo root on the `mydev` branch.
+
+## Contents
+
+1. [One-time setup](#1-one-time-setup)
+2. [Prepare the data](#2-prepare-the-data)
+3. [Train](#3-train)
+4. [Evaluate](#4-evaluate)
+5. [Reference](#5-reference): manifest format, `slider:` keys, scripts,
+   folder layout, known issues
+
+## 1. One-time setup
+
+```bash
+uv sync                      # .venv with the pinned torch / diffusers (+ pytest)
+.venv/bin/python -m pytest -q extensions/slider_tuple/tests   # CPU-only, ~15 s
+```
+
+- `.env` in the repo root: `HF_TOKEN` (and `HF_HOME` if the Hugging Face cache
+  lives elsewhere). Scripts load it themselves.
+- **Raw model** (training): `models/BigLoveKreaLife2_raw_AI-Toolkit/`, a folder
+  with one DiT `.safetensors` in the `krea/Krea-2-Raw` format. The text
+  encoder and VAE download from their default repos on first use. Any Krea 2
+  Raw fine-tune in that format works; `krea/Krea-2-Raw` for the official one.
+- **Turbo model** (previews and evaluation): the deployed checkpoint, e.g. the
+  ComfyUI int8_convrot file
+  `/home/csprunger/.nvme_cache/diffusion_models/Krea2/BigLoveKreaLife2_int8.safetensors`.
+  Use the Turbo that belongs to the Raw you train on.
+- **Mask and metric models** download on first use: Sapiens2 matting
+  (`facebook/sapiens2-matting-1b`, 6.2 GB, into `models/sapiens2/`),
+  torchvision Keypoint R-CNN (~230 MB) and AlexNet for LPIPS (~230 MB,
+  torch hub cache).
+- GPU memory (WSL): `/usr/lib/wsl/lib/nvidia-smi` (not on `PATH`).
+
+## 2. Prepare the data
+
+What a good tuple is (from the handoff's dataset contract):
+
+- One person per tuple, **2+ images at different attribute levels**, same
+  pose, framing, clothing, light and background, everything except the
+  attribute. Edited images (e.g. heavier / thinner versions of one photo)
+  work; the edit should change only the attribute.
+- Faces and backgrounds identical across members: paste-back (below) does
+  that for edits of an original photo.
+- **One caption per tuple, without the attribute.** Describe everything
+  else in detail, so the LoRA does not learn it. Don't mention body size
+  for a weight slider.
+- 15-20 tuples is a usable start; ~10% are held out for evaluation.
+
+### 2a. Edits of original photos: paste-back (the usual path)
+
+Folder layout, files matched by name (any of png/jpg/webp):
+
+```
+datasets/<slider>_data/
+  orig/<name>.png        the untouched photo
+  heavy/<name>.png       one folder per level (any names)
+  thin/<name>.png
+  captions/<name>.json   or <name>.txt (optional, can come later)
+```
+
+```bash
+.venv/bin/python extensions/slider_tuple/scripts/paste_back.py \
+    datasets/weight_slider_data datasets/weight_slider_tuples \
+    --member heavy=1 --member thin=-1 --original orig \
+    --captions datasets/weight_slider_data/captions --preview
+```
+
+- `--member NAME=LEVEL` per member folder. Levels are numbers on one scale:
+  `+1/-1` for "more/less", or measured values (e.g. estimated BMI) if you
+  have them (then use `level_norm: median_span`, see §3).
+- Captions: `<name>.txt`, or `<name>.json` with the caption under
+  `--caption-key` (default `caption_long`; e.g. `caption_short`). Tuples without
+  one get `--default-caption`, and the final line lists them.
+- Output: `heavy/`, `thin/`, `original/`, `masks/` (one loss mask per tuple:
+  body 1, head 0, background `--background` 0.2), `tuples.jsonl`,
+  `report.csv`, `preview/`.
+- **Check by eye** `preview/<name>.jpg`: raw vs pasted members, the heavy-thin
+  difference (should be body only) and the face close-ups. In `report.csv`,
+  `head_pasted` False means the edit's own head was kept (the final line
+  lists those); a large `registration_max_shift_px` means the editor moved
+  the frame, a large `head_shift_px` that it moved the head.
+- Re-running is cheap: finished images are reused, so new captions only
+  rewrite `tuples.jsonl`. Use `--overwrite` after changing the images or the
+  paste-back settings.
+
+### 2b. Already aligned images (no originals)
+
+Write `tuples.jsonl` yourself (format in §5) or convert a before/after folder
+pair with `scripts/pairs_to_manifest.py positive_dir negative_dir out.jsonl`,
+then add one loss mask per tuple:
+
+```bash
+.venv/bin/python extensions/slider_tuple/scripts/make_tuple_masks.py \
+    datasets/<slider>/tuples.jsonl datasets/<slider>/tuples_masked.jsonl --preview
+```
+
+### 2c. Hold out tuples for evaluation
+
+```bash
+.venv/bin/python extensions/slider_tuple/scripts/split_holdout.py datasets/weight_slider_tuples/tuples.jsonl
+```
+
+Writes `train.jsonl` and `held_out.jsonl` next to it (10%, seeded, so a re-run
+after a caption change holds out the same tuples; `--ids a,b` to choose).
+Re-run it whenever `tuples.jsonl` changes.
+
+## 3. Train
+
+```bash
+cp extensions/slider_tuple/configs/krea2_weight_slider.yaml config/my_slider.yaml   # config/ is gitignored
+# edit the lines marked EDIT, then
+.venv/bin/python run.py config/my_slider.yaml
+```
+
+What to edit (all commented in the file):
+
+- `name`: run folder `output/<name>/` and LoRA file name.
+- `slider_tuples`: your `train.jsonl`.
+- `level_norm`: `none` for `+1/-1` levels (strength 1 = the edit),
+  `median_span` for measured levels (strength 1 = a typical tuple's range).
+- `anchor_prompts`: things the slider must leave alone (scenes without
+  people by default; add e.g. faces or clothing prompts if they drift).
+- `turbo_preview`: your Turbo checkpoint (remove the key to preview on Raw).
+- `sample.prompts`: held-out captions with `--m -1`, `--m 0`, `--m 1`
+  (same seed, `walk_seed: false`, so only the strength differs).
+
+During training:
+
+- **Startup log:** tuples kept / dropped (`min_span`), the masked-loss count,
+  warnings about members masked differently.
+- **`output/<name>/slider_debug/`:** the first steps' members with their
+  multipliers. Check that "+" is the direction you want.
+- **Samples** in `output/<name>/samples/` every `sample_every` steps, on Turbo
+  (8 steps, CFG off). `--m 0` must not change between sample events.
+- **Metrics** (`loss_log.db`, also in the UI): `slider/weighted_scale_sum` ~0,
+  `slider/loss_rank<r>` per member rank, `slider/anchor_loss`.
+- Speed on an RTX 5090: ~4.5 s/step plain, ~7 s/step with anchors at
+  `anchor_prob: 1`, 21-24 GiB.
+
+The LoRA is `output/<name>/<name>.safetensors`, plus step snapshots
+`<name>_<step>.safetensors`.
+
+## 4. Evaluate
+
+The sweep renders held-out prompts × seeds × strengths on Turbo and measures
+linearity and side effects:
+
+```bash
+.venv/bin/python extensions/slider_tuple/scripts/slider_sweep.py \
+    --model /home/csprunger/.nvme_cache/diffusion_models/Krea2/BigLoveKreaLife2_int8.safetensors \
+    --lora output/my_slider/my_slider.safetensors \
+    --prompts datasets/weight_slider_tuples/held_out.jsonl \
+    --multipliers 0,0.25,0.5,0.75,1 --diagnostic=-0.25,-0.5,-0.75,-1 \
+    --out output/sweeps/my_slider
+```
+
+- Outputs: `images/`, `sheets/prompt_NNN.png` (contact sheet per prompt, the
+  first thing to look at), `sweep.csv`, `summary.txt` / `summary.json`.
+- **Side effects, built in:** `lpips_bg` (change outside the people) and
+  `face_lpips` (change on the head crop), each against the same prompt and
+  seed at strength 0. Flags in `summary.txt` mark side effects worse at -1
+  than at +1.
+- **Attribute linearity** needs a measurement function:
+  `--measure mymodule:score`, a function taking a PIL image and returning a
+  number (e.g. a body-width estimate). Without it the summary reports side
+  effects only.
+- `--multipliers` is the main range and `--diagnostic` the extra one; both are
+  rendered. For a two-way slider like weight, put the negative side in
+  `--diagnostic` as above (the default assumes a positive-only slider).
+- Re-runs reuse rendered images; delete `images/` to re-render.
+- Sanity check of the tooling: `--zero-lora` must give slope ~0 and LPIPS ~0.
+- `scripts/image_lpips.py ref.png a.png ...` compares any images directly.
+
+## 5. Reference
+
+### Manifest (`tuples.jsonl`, one tuple per line)
+
+```json
+{"id": "p001", "caption": "photo of ...", "quality": 1.0,
+ "original": "original/p001.png", "mask": "masks/p001.png",
+ "members": [
+   {"image": "real/p001.png",  "level": 1.0,  "role": "real"},
+   {"image": "edit1/p001.png", "level": 0.4,  "role": "edit", "quality": 0.8, "level_var": 0.05},
+   {"image": "edit2/p001.png", "level": -0.5, "role": "edit"}]}
+```
+
+- Paths are relative to the manifest's folder.
+- `level` (required) is the attribute on one scale across the dataset.
+- Optional: `role` (`real` | `edit`, at most one `real`), `quality` (0-1,
+  weights the tuple / member), `level_var` (>0, uncertain levels weigh less),
+  `original` (metrics and debug dumps only).
+- `mask` is grayscale, same size as the images: 1 trains fully, 0 ignores.
+  Prefer one tuple-level `mask`: per-member masks leak shared content
+  where they differ (NOTES.md, "One mask per tuple").
+- Multipliers are centered per step: s_i = (level_i − weighted mean) / κ.
+
+### `slider:` keys (process level)
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `level_norm` | `median_span` | κ: `median_span` / `max_span` of tuple spans, or `none` (κ = 1) |
+| `members_per_step` | `all` | members per tuple per step (int ≥ 2 samples subsets) |
+| `min_span` | 0.3 | drop tuples (and subsets) spanning less, in κ units |
+| `weight_cap_pct` | 95 | cap each tuple's leverage at this percentile |
+| `backward_per_member` | false | one backward per member (less memory, slower) |
+| `debug_dump_steps` | 0 | write member sheets for the first N steps |
+| `anchor_strength` | 0 (off) | weight of the anchor loss |
+| `anchor_prompts` | [] | prompts whose predictions the LoRA must not change |
+| `anchor_prob` | 1.0 | chance per step to add the anchor loss |
+| `anchor_max_multiplier` | 1.0 | anchor strengths drawn from ±this |
+| `anchor_images` | none | folder of images to noise for anchors (default: the batch latents) |
+| `turbo_preview` | none | Turbo `.safetensors` for training samples |
+| `turbo_preview_steps` / `_cfg` / `_mu` | 8 / 1.0 / 1.15 | Turbo sampling |
+| `turbo_preview_offload` | true | move Raw to the CPU while previewing |
+| `center_offset` | 0 | test hook only; breaks centering |
+
+Dataset entries take `slider_tuples: <manifest>` with
+`guidance_type: slider_tuple`; augmentations and `folder_path` are rejected.
+
+### Scripts
+
+| Script | Use |
+| --- | --- |
+| `scripts/paste_back.py` | edits + originals → aligned tuple dataset with masks (§2a) |
+| `scripts/make_tuple_masks.py` | one loss mask per tuple for an existing manifest (§2b) |
+| `scripts/pairs_to_manifest.py` | before/after folders → `tuples.jsonl` (§2b) |
+| `scripts/split_holdout.py` | train / held-out manifests (§2c) |
+| `scripts/slider_sweep.py` | linearity and side-effect sweep on Turbo (§4) |
+| `scripts/image_lpips.py` | LPIPS between images |
+| `scripts/dev/compare_runs.py` | two configs, same seed, short runs: loss / speed / memory A/B |
+| `scripts/dev/make_smoke_pairs.py` | synthetic pairs for plumbing tests (not training data) |
+| `scripts/dev/make_band_masks.py` | placeholder masks for plumbing tests |
+| `scripts/dev/tuples_to_pairs.py` | reduce tuples to their extremes (tuples-vs-pairs comparison) |
+
+`configs/krea2_weight_slider.yaml` is the training template;
+`configs/dev/` holds the milestone smoke and acceptance configs (NOTES.md).
+
+### Code layout
+
+| File | Role |
+| --- | --- |
+| `SliderTupleTrainer.py` | the trainer (`type: slider_tuple_trainer`), subclass of SDTrainer |
+| `manifest.py`, `tuples.py` | manifest parsing; `slider:` config and dataset wiring |
+| `centering.py`, `loss.py` | centered multipliers, member weights, the tuple loss |
+| `members.py`, `anchors.py` | member images / masks / latent cache; anchor loss |
+| `scales.py` | F1: per-image scales for polarity datasets |
+| `turbo.py` | Turbo previews and ComfyUI checkpoint loading |
+| `paste_back.py`, `tuple_masks.py` | paste-back and mask building |
+| `sweep.py` | sweep metrics and summaries |
+
+### Known issues
+
+- Krea 2 needs `model.dtype: bf16` in every config (upstream bug; the
+  float16 default breaks decoding).
+- Training needs 8-bit DiT weights on 32 GB (`qtype: convrot8`); unquantized
+  bf16 does not fit and `low_vram` is far too slow.
+- Paste-back: long hair outside the head ellipse stays the editor's per
+  member; background that only the original's body covered keeps the
+  editor's reconstruction.
+- Not yet checked: loading these LoRAs in ComfyUI on the int8_convrot Turbo
+  (the sweep and previews use the toolkit's own hooks).

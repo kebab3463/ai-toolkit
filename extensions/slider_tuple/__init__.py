@@ -1,4 +1,4 @@
-# Image-pair / image-tuple slider training (see NOTES.md and the Krea 2 slider handoff).
+# Image-pair / image-tuple slider training (workflow: README.md; dev log: NOTES.md).
 from toolkit.extension import Extension
 
 

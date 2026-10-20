@@ -2,7 +2,8 @@
 
 Checked 2026-10-16 against upstream `0d19b26` (= `origin/main`) and the `mydev`
 branch rebased on it. Everything in the handoff's codebase map holds; this file
-records only what differs from the handoff or what it does not say.
+records only what differs from the handoff or what it does not say. For the
+step-by-step workflow (data -> training -> sweep), see `README.md`.
 
 **Guiding doc.** Since 2026-10-19 development follows
 `docs/Handoff Tuple Slider Training for Krea 2 in an ai-toolkit Fork.md`, which
