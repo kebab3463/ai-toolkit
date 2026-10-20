@@ -1,0 +1,75 @@
+"""Build one loss mask per tuple (see NOTES.md, "One mask per tuple").
+
+    mask = background + (body_weight - background) * union_of_member_bodies,  head -> 0
+
+Bodies come from person mattes (H x W in [0, 1]); the head region from COCO
+keypoints (nose, eyes, ears, shoulders) as an ellipse, or from the user's own
+head masks (e.g. the paste-back region of their editing pipeline). Pure
+functions here; the models are wired up in scripts/make_tuple_masks.py.
+"""
+
+from typing import Optional, Sequence
+
+import numpy as np
+
+# COCO keypoint indices
+NOSE, L_EYE, R_EYE, L_EAR, R_EAR, L_SHOULDER, R_SHOULDER = 0, 1, 2, 3, 4, 5, 6
+
+
+def union(maps: Sequence[np.ndarray]) -> np.ndarray:
+    return np.maximum.reduce([np.asarray(m, dtype=np.float32) for m in maps])
+
+
+def head_ellipse(keypoints: np.ndarray, size, min_score: float = 1.0, margin: float = 0.15) -> Optional[np.ndarray]:
+    """Head region (H x W, 0/1) from one person's COCO keypoints, rows (x, y, score).
+
+    Width from the ear distance (x1.4 for hair), else eye distance (x3), else
+    shoulder width (x0.45); height 1.35 x width; centered a little above the
+    face keypoints (eyes sit near the middle of the head, hair adds height).
+    ``margin`` enlarges both axes. Returns None if no face keypoint is visible."""
+    width, height = size
+    kp = np.asarray(keypoints, dtype=np.float64)
+    visible = kp[:, 2] >= min_score
+
+    def dist(a, b):
+        return float(np.hypot(*(kp[a, :2] - kp[b, :2]))) if visible[a] and visible[b] else None
+
+    face = [i for i in (NOSE, L_EYE, R_EYE, L_EAR, R_EAR) if visible[i]]
+    if not face:
+        return None
+    ears, eyes, shoulders = dist(L_EAR, R_EAR), dist(L_EYE, R_EYE), dist(L_SHOULDER, R_SHOULDER)
+    if ears:
+        head_w = 1.4 * ears
+    elif eyes:
+        head_w = 3.0 * eyes
+    elif shoulders:
+        head_w = 0.45 * shoulders
+    else:
+        return None
+    head_h = 1.35 * head_w
+    cx, cy = kp[face, 0].mean(), kp[face, 1].mean() - 0.05 * head_h
+    rx, ry = head_w / 2 * (1 + margin), head_h / 2 * (1 + margin)
+    ys, xs = np.mgrid[0:height, 0:width]
+    return ((((xs - cx) / rx) ** 2 + ((ys - cy) / ry) ** 2) <= 1.0).astype(np.float32)
+
+
+def compose(body: np.ndarray, head: np.ndarray, background: float = 0.2, body_weight: float = 1.0) -> np.ndarray:
+    """Loss mask in [0, 1] (H x W): background + (body_weight - background) * body, head -> 0."""
+    if not 0 <= background <= body_weight <= 1:
+        raise ValueError("need 0 <= background <= body_weight <= 1")
+    mask = background + (body_weight - background) * np.clip(body, 0.0, 1.0)
+    mask[np.asarray(head) >= 0.5] = 0.0
+    return mask.astype(np.float32)
+
+
+def to_png_array(mask: np.ndarray) -> np.ndarray:
+    return np.clip(np.round(mask * 255.0), 0, 255).astype(np.uint8)
+
+
+def overlay(image: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """Preview: the image darkened where the mask is low and tinted red on the head (mask 0)."""
+    img = np.asarray(image, dtype=np.float32)
+    shown = img * (0.25 + 0.75 * mask[..., None])
+    head = mask <= 0.0
+    shown[head] = 0.5 * shown[head] + 0.5 * np.array([255.0, 0.0, 0.0])
+    return np.clip(shown, 0, 255).astype(np.uint8)

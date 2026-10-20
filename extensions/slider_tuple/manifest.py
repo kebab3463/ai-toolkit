@@ -184,6 +184,24 @@ def parse_tuple(data, base: str, where: str) -> SliderTuple:
     )
 
 
+def rebase_entry(entry: dict, src_dir: str, out_dir: str) -> dict:
+    """Copy of a raw manifest entry with every relative path (member image /
+    mask, tuple original / mask) rewritten from src_dir to be relative to out_dir."""
+    def rebase(path):
+        absolute = path if os.path.isabs(path) else os.path.join(src_dir, path)
+        return os.path.relpath(absolute, out_dir)
+
+    out = dict(entry, members=[dict(m) for m in entry["members"]])
+    for m in out["members"]:
+        for key in ("image", "mask"):
+            if m.get(key):
+                m[key] = rebase(m[key])
+    for key in ("original", "mask"):
+        if out.get(key):
+            out[key] = rebase(out[key])
+    return out
+
+
 def load_manifest(path: str) -> List[SliderTuple]:
     path = os.path.abspath(path)
     if not os.path.isfile(path):

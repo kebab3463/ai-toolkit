@@ -12,22 +12,16 @@ Usage (from the repo root):
 import argparse
 import json
 import os
+import sys
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
+
+from extensions.slider_tuple.manifest import rebase_entry  # noqa: E402
 
 
 def to_pair(entry: dict, src_dir: str, out_dir: str) -> dict:
-    def rebase(path):
-        absolute = path if os.path.isabs(path) else os.path.join(src_dir, path)
-        return os.path.relpath(absolute, out_dir)
-
     members = sorted(entry["members"], key=lambda m: -m["level"])
-    pair = dict(entry, members=[dict(members[0]), dict(members[-1])])
-    for m in pair["members"]:
-        for key in ("image", "mask"):
-            if m.get(key):
-                m[key] = rebase(m[key])
-    if pair.get("original"):
-        pair["original"] = rebase(pair["original"])
-    return pair
+    return rebase_entry(dict(entry, members=[members[0], members[-1]]), src_dir, out_dir)
 
 
 def main():
