@@ -151,3 +151,20 @@ def test_tuples_to_pairs_keeps_the_extremes(tmp_path):
     assert [m.level for m in parsed.members] == [3.0, 1.0]
     assert parsed.members[1].mask.endswith("mask.png") and parsed.original.endswith("original.png")
     assert parsed.quality == 0.7 and parsed.caption == "photo of a person"
+
+
+def test_tuple_mask_applies_to_members_without_their_own(tmp_path):
+    t = basic(tmp_path)
+    t["mask"] = img(tmp_path, "p01/tuple_mask.png")
+    parsed = load_manifest(write(tmp_path, t))[0]
+    assert parsed.mask.endswith("tuple_mask.png")
+    assert all(m.mask == parsed.mask for m in parsed.members) and not parsed.mask_mismatch
+
+    t["members"][1]["mask"] = img(tmp_path, "p01/own_mask.png")  # an override is a mismatch
+    parsed = load_manifest(write(tmp_path, t, name="override.jsonl"))[0]
+    assert parsed.members[1].mask.endswith("own_mask.png") and parsed.mask_mismatch
+
+    t = basic(tmp_path, "p02")
+    t["members"][0]["mask"] = img(tmp_path, "p02/m.png")  # some members unmasked
+    assert load_manifest(write(tmp_path, t, name="partial.jsonl"))[0].mask_mismatch
+    assert not load_manifest(write(tmp_path, basic(tmp_path, "p03"), name="none.jsonl"))[0].mask_mismatch

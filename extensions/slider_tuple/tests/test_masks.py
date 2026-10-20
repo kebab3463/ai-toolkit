@@ -128,3 +128,31 @@ def test_trainer_applies_manifest_masks(tmp_path):
     assert losses["ones"] == pytest.approx(losses["plain"], rel=1e-6)
     assert losses["body"] != pytest.approx(losses["plain"], rel=1e-3)
     assert losses["half"] not in (pytest.approx(losses["plain"], rel=1e-3), pytest.approx(losses["body"], rel=1e-3))
+
+
+def test_different_member_masks_leak_shared_content():
+    """With identical member images, matching masks cancel exactly (zero LoRA
+    gradient at init); different per-member masks do not."""
+    from extensions.slider_tuple.centering import centered_scales
+
+    image = torch.randn(1, 4, 8, 8, generator=torch.Generator().manual_seed(3))
+    noise = torch.randn(1, 4, 8, 8, generator=torch.Generator().manual_seed(4))
+    scales = centered_scales([2.0, 1.0, 0.0], [1.0, 1.0, 1.0], kappa=1.0)
+    body_a, body_b = head_mask(head_rows=16), head_mask(head_rows=24)
+
+    def grad(masks):
+        sd = StubModel()
+        with torch.no_grad():
+            sd.lora.weight.zero_()
+        slider_tuple_loss(
+            sd, slot_latents=[image.clone() for _ in scales], slot_scales=[[s] for s in scales],
+            slot_weights=[[1.0]] * 3, noise=noise, timesteps=torch.tensor([400.0]), conditional_embeds=make_embeds(1),
+            pred_kwargs={}, batch=make_batch(image), train_config=make_train_config(), slot_masks=masks,
+        )
+        return sd.lora.weight.grad.abs().max().item()
+
+    assert grad([body_a, body_a, body_a]) < 1e-6
+    # a mismatch on the member at multiplier 0 (the middle level) is harmless ...
+    assert grad([body_a, body_b, body_a]) < 1e-6
+    # ... but between members with nonzero multipliers it leaks
+    assert grad([body_a, body_a, body_b]) > 1e-3

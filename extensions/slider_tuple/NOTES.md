@@ -352,6 +352,18 @@ multipliers.
 
 ### M5: masked loss (F3) and anchor preservation (F4) (2026-10-16)
 
+**One mask per tuple (2026-10-20).** At LoRA init the per-pixel gradient is
+sum_i w_i s_i M_i^2 (v0 - y_i). With y_i = c + d_i (shared content c), the
+shared term is M^2 (v0 - c) sum_i w_i s_i = 0 only if every member has the same
+mask M; with per-member masks it is sum_i w_i s_i M_i^2 (v0 - c), nonzero
+wherever masks differ between members with nonzero multipliers. Body masks
+differ exactly along the silhouette, so per-member masks leak shared content
+there. Hence: a tuple-level `"mask"` in `tuples.jsonl` (applies to members
+without their own), built as the union of the members' bodies at 1.0, the
+(identical) pasted-back head at 0, background 0.1-0.3. The trainer warns at
+startup about tuples whose members are masked differently. Test:
+`test_different_member_masks_leak_shared_content`.
+
 **F3, masks.** Per-member `"mask"` in `tuples.jsonl` (grayscale, same size as
 the image: ~1 body, 0 head, 0.1-0.3 background). Masks follow the anchor's
 flip/resize/crop and the dataset's `invert_mask` / `mask_min_value` like

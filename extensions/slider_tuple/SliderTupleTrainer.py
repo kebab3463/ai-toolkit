@@ -98,6 +98,15 @@ class SliderTupleTrainer(SDTrainer):
         print_acc(f"slider_tuple: {len(tuples)} tuples, {sum(len(t.members) for t in tuples)} members; {cfg}")
         if n_masks:
             print_acc(f"slider_tuple: masked loss on for {n_masks} members (unmasked members use weight 1)")
+        mismatched = [t.id for t in tuples if t.mask_mismatch]
+        if mismatched:
+            shown = ", ".join(mismatched[:10]) + (f" (+{len(mismatched) - 10} more)" if len(mismatched) > 10 else "")
+            print_acc(
+                f"slider_tuple: WARNING {len(mismatched)} tuples mask their members differently: {shown}. "
+                "Centering cancels shared content only where every member has the same mask weight, so "
+                "shared content leaks into the slider where these masks differ. Prefer one tuple-level "
+                "mask (e.g. the union of the members' bodies)."
+            )
         if cfg.center_offset != 0:
             print_acc(
                 f"slider_tuple: WARNING center_offset = {cfg.center_offset:g} (test hook): multipliers are no "

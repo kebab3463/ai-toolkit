@@ -1,7 +1,7 @@
 """Tuple manifests (F2): ``tuples.jsonl``, one tuple per line.
 
     {"id": "p01", "caption": "photo of a person ...", "quality": 1.0,
-     "original": "p01/original.png",
+     "original": "p01/original.png", "mask": "p01/mask.png",
      "members": [{"image": "p01/real.png", "level": 3.1, "role": "real"},
                  {"image": "p01/edit1.png", "level": 2.4, "role": "edit", "quality": 0.8},
                  {"image": "p01/edit2.png", "level": 1.6, "role": "edit", "level_var": 0.04,
@@ -13,7 +13,10 @@ differences matter (training centers them per step, see centering.py).
 "edit" (default); at most one real member per tuple. Optional ``quality`` in
 [0, 1] and measurement variance ``level_var`` > 0 set member weights; tuple
 ``quality`` sets the tuple weight. ``original`` is the untouched real photo,
-used for metrics and debug dumps only. Paths are relative to the manifest's
+used for metrics and debug dumps only. A tuple ``mask`` is the loss mask for
+every member without its own ``mask``; one mask per tuple is recommended,
+because centering only cancels shared content when every member is weighted
+identically pixel by pixel (see mask_mismatch). Paths are relative to the manifest's
 folder (or absolute); every member of a tuple must have the same pixel size.
 Pairs are tuples with two members.
 """
@@ -26,7 +29,7 @@ from typing import List, Optional
 
 from PIL import Image
 
-TUPLE_KEYS = {"id", "caption", "members", "quality", "original"}
+TUPLE_KEYS = {"id", "caption", "members", "quality", "original", "mask"}
 MEMBER_KEYS = {"image", "level", "role", "mask", "quality", "level_var"}
 ROLES = ("real", "edit")
 
@@ -48,6 +51,7 @@ class SliderTuple:
     members: List[TupleMember]
     quality: Optional[float] = None
     original: Optional[str] = None
+    mask: Optional[str] = None
     size: tuple = (0, 0)
 
     @property
@@ -59,6 +63,12 @@ class SliderTuple:
     def span(self) -> float:
         levels = [m.level for m in self.members]
         return max(levels) - min(levels)
+
+    @property
+    def mask_mismatch(self) -> bool:
+        """True if members are masked differently (different files, or some
+        unmasked): shared content then no longer cancels where the masks differ."""
+        return len({m.mask for m in self.members}) > 1
 
     @property
     def by_level(self) -> List[int]:
@@ -144,6 +154,10 @@ def parse_tuple(data, base: str, where: str) -> SliderTuple:
         raise ManifestError(f"{where}: 'members' must list at least two members")
 
     members = [_member(m, base, f"{where} member {i}") for i, m in enumerate(raw_members)]
+    tuple_mask = _path(data["mask"], base, f"{where} mask") if data.get("mask") is not None else None
+    for m in members:
+        if m.mask is None:
+            m.mask = tuple_mask
     if len({m.image for m in members}) != len(members):
         raise ManifestError(f"{where}: the same image is listed twice")
     if sum(m.role == "real" for m in members) > 1:
@@ -165,6 +179,7 @@ def parse_tuple(data, base: str, where: str) -> SliderTuple:
         members=members,
         quality=_quality(data.get("quality"), f"{where} quality"),
         original=_path(data["original"], base, f"{where} original") if data.get("original") is not None else None,
+        mask=tuple_mask,
         size=next(iter(sizes.values())),
     )
 

@@ -267,3 +267,17 @@ def test_dataset_option_validation(raw, message):
 def test_slider_block_validation(slider, message):
     with pytest.raises(ValueError, match=message):
         SliderTrainConfig.from_raw(slider)
+
+
+def test_startup_warns_about_mismatched_member_masks(tmp_path, capsys):
+    root = tmp_path / "data"
+    manifest = make_manifest(root, {"p01": [("real", 1.0), ("edit", -1.0)], "p02": [("real", 1.0), ("edit", -1.0)]})
+    Image.new("L", (96, 72), 255).save(root / "m.png")
+    lines = [json.loads(line) for line in open(manifest)]
+    lines[0]["mask"] = "m.png"                      # p01: one tuple-level mask -> fine
+    lines[1]["members"][0]["mask"] = "m.png"        # p02: only one member masked -> mismatch
+    with open(manifest, "w") as f:
+        f.write("\n".join(json.dumps(x) for x in lines) + "\n")
+    make_trainer(tmp_path, manifest)
+    out = capsys.readouterr().out
+    assert "WARNING 1 tuples mask their members differently: p02" in out
