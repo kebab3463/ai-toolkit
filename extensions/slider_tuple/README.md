@@ -119,6 +119,33 @@ Writes `train.jsonl` and `held_out.jsonl` next to it (10%, seeded, so a re-run
 after a caption change holds out the same tuples; `--ids a,b` to choose).
 Re-run it whenever `tuples.jsonl` changes.
 
+### 2d. Measure the data (weight sliders; do this before training)
+
+Check that the edits actually change the attribute, and by how much:
+
+```bash
+.venv/bin/python extensions/slider_tuple/scripts/measure_tuples.py \
+    datasets/weight_slider_tuples/tuples.jsonl --preview
+```
+
+- The score is body width in torso lengths (`body_measure.py`): mean
+  silhouette width from below the shoulders to the upper thighs, divided by
+  the shoulder-to-hip distance. It is reliable *within* a tuple or a sweep
+  (same pose and framing), not as an absolute weight across photos.
+- It prints each tuple's scores, how many tuples the score orders like their
+  levels, and whether the original lies between its members. It writes
+  `measurements.csv` (also chest / waist / hip / thigh widths) and
+  `measure_preview/<id>.jpg` (measured band shaded) next to the manifest.
+- **Look at the size of the changes, not just the order.** In the weight
+  data, heavy measured the same as the original (median −0.1%) and thin 9%
+  narrower, so the "heavy" edits added almost nothing (NOTES.md,
+  "Body-width measure").
+- Measured levels instead of ±1: `--out tuples_measured.jsonl`, optionally
+  `--add-original` (the original becomes a `real` member at its measured
+  level). Train that with `level_norm: median_span`, and run `split_holdout.py`
+  on it. Tuples with an unmeasurable image (shoulders or hips hidden) are left
+  out and listed.
+
 ## 3. Train
 
 ```bash
@@ -165,8 +192,8 @@ linearity and side effects:
     --model /home/csprunger/.nvme_cache/diffusion_models/Krea2/BigLoveKreaLife2_int8.safetensors \
     --lora output/my_slider/my_slider.safetensors \
     --prompts datasets/weight_slider_tuples/held_out.jsonl \
-    --multipliers 0,0.25,0.5,0.75,1 --diagnostic=-0.25,-0.5,-0.75,-1 \
-    --out output/sweeps/my_slider
+    --multipliers 0,0.5,1,1.5,2,3 --diagnostic=-0.5,-1,-2,-3 \
+    --measure body --out output/sweeps/my_slider_turbo
 ```
 
 - Outputs: `images/`, `sheets/prompt_NNN.png` (contact sheet per prompt, the
@@ -175,10 +202,19 @@ linearity and side effects:
   `face_lpips` (change on the head crop), each against the same prompt and
   seed at strength 0. Flags in `summary.txt` mark side effects worse at -1
   than at +1.
-- **Attribute linearity** needs a measurement function:
+- **Attribute linearity** needs a measurement: `--measure body` (built-in
+  body width, as in §2d, sharing the side-effect models) or
   `--measure mymodule:score`, a function taking a PIL image and returning a
-  number (e.g. a body-width estimate). Without it the summary reports side
-  effects only.
+  number, or None when it can't measure. Without it the summary reports side
+  effects only. Unmeasurable images are left out of the fit and counted.
+- **What slope to expect** (body width): a slider that fully learned its data
+  changes the score by about half the data's mean member-to-member difference
+  per unit of `--m` with `level_norm: none` and ±1 levels, or by one median
+  span with `median_span`. For the first weight data that is ~0.05 per
+  unit, i.e. ~5% width, which is why `--m 1` looks subtle; sweep to 2-3.
+- **Raw vs Turbo:** run the same sweep with `--model <Raw folder> --raw`. A
+  slope on Raw but not on Turbo means the LoRA doesn't transfer; no slope
+  on either means it didn't learn.
 - `--multipliers` is the main range and `--diagnostic` the extra one; both are
   rendered. For a two-way slider like weight, put the negative side in
   `--diagnostic` as above (the default assumes a positive-only slider).
@@ -240,6 +276,7 @@ Dataset entries take `slider_tuples: <manifest>` with
 | `scripts/make_tuple_masks.py` | one loss mask per tuple for an existing manifest (§2b) |
 | `scripts/pairs_to_manifest.py` | before/after folders → `tuples.jsonl` (§2b) |
 | `scripts/split_holdout.py` | train / held-out manifests (§2c) |
+| `scripts/measure_tuples.py` | body-width measure of every member; measured levels (§2d) |
 | `scripts/slider_sweep.py` | linearity and side-effect sweep on Turbo (§4) |
 | `scripts/image_lpips.py` | LPIPS between images |
 | `scripts/dev/compare_runs.py` | two configs, same seed, short runs: loss / speed / memory A/B |
@@ -262,6 +299,7 @@ Dataset entries take `slider_tuples: <manifest>` with
 | `turbo.py` | Turbo previews and ComfyUI checkpoint loading |
 | `paste_back.py`, `tuple_masks.py` | paste-back and mask building |
 | `sweep.py` | sweep metrics and summaries |
+| `body_measure.py` | body width in torso lengths (`--measure body`) |
 
 ### Known issues
 

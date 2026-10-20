@@ -9,8 +9,10 @@ Defaults are the deployment path, Krea 2 Turbo: 8 steps, CFG off, fixed
 schedule mu 1.15 (model_kwargs.schedule_mu). ``--raw`` switches to Raw-style
 sampling (25 steps, CFG 4, resolution-dependent mu) for a Raw checkpoint.
 
+Attribute measurement:
+  --measure body     built-in body width in torso lengths (body_measure.py; weight sliders)
 Callables (``module:function``, imported normally, so put them on PYTHONPATH):
-  --measure  PIL.Image -> float      the attribute measurement
+  --measure  PIL.Image -> float or None (not measurable)   the attribute measurement
   --face     PIL.Image -> 1-D array or None (no face)   optional identity embedding
 Built-in side effects: background LPIPS outside the person mattes and face
 LPIPS on the head crops (Sapiens2 matting + Keypoint R-CNN heads).
@@ -71,7 +73,8 @@ def parse_args():
     p.add_argument("--width", type=int, default=1024)
     p.add_argument("--height", type=int, default=1024)
     p.add_argument("--qtype", default="convrot8", help="DiT quantization ('none' for bf16)")
-    p.add_argument("--measure", help="module:function, PIL image -> float")
+    p.add_argument("--measure", help="'body' (built-in body width, see body_measure.py) or module:function, "
+                                     "PIL image -> float or None")
     p.add_argument("--face", help="module:function, PIL image -> embedding or None")
     p.add_argument("--no-lpips", action="store_true", help="skip background and face LPIPS (and their Sapiens2 / keypoint models)")
     p.add_argument("--lpips-res", type=int, default=512, help="images are resized to this for LPIPS")
@@ -168,14 +171,17 @@ def measure(args, rows, models=None):
     """Fill measure / lpips_bg / face_lpips / face_sim; the m=0 image is the reference per prompt and seed.
 
     ``models``: optional (lpips_fn, matte_fn, keypoints_fn) for tests; lpips_fn
-    takes two (1, 3, H, W) tensors in [-1, 1] and returns a (1, 1, H, W) map."""
+    takes two (1, 3, H, W) tensors in [-1, 1] and returns a (1, 1, H, W) map
+    (None: no LPIPS)."""
     import numpy as np
     import torch
     from PIL import Image
 
+    from extensions.slider_tuple.body_measure import measure_body
     from extensions.slider_tuple.tuple_masks import head_ellipse
 
-    measure_fn = load_callable(args.measure) if args.measure else None
+    body = args.measure == "body"  # built in: body width from the same matte / keypoints
+    measure_fn = load_callable(args.measure) if args.measure and not body else None
     face_fn = load_callable(args.face) if args.face else None
     refs = {(r.prompt_idx, r.seed): r for r in rows if math.isclose(r.m, 0.0)}
     if len(refs) != len({(r.prompt_idx, r.seed) for r in rows}):
@@ -184,11 +190,12 @@ def measure(args, rows, models=None):
     lpips_fn = matte_fn = keypoints_fn = None
     if models is not None:
         lpips_fn, matte_fn, keypoints_fn = models
-    elif not args.no_lpips:
-        import lpips
+    elif not args.no_lpips or body:
         from extensions.slider_tuple.tuple_masks import load_mask_models
-        net = lpips.LPIPS(net="alex", spatial=True, verbose=False).to(args.device).eval()
-        lpips_fn = lambda a, b: net(a.to(args.device), b.to(args.device))
+        if not args.no_lpips:
+            import lpips
+            net = lpips.LPIPS(net="alex", spatial=True, verbose=False).to(args.device).eval()
+            lpips_fn = lambda a, b: net(a.to(args.device), b.to(args.device))
         matte_fn, keypoints_fn = load_mask_models(args.device)
 
     size = (args.lpips_res, args.lpips_res)
@@ -199,12 +206,15 @@ def measure(args, rows, models=None):
         if path not in cache:
             img = Image.open(path).convert("RGB")
             entry = {"img": img}
-            if lpips_fn is not None:
-                entry["tensor"] = to_tensor(img.resize(size, Image.BICUBIC))
-                matte = Image.fromarray((np.clip(matte_fn(img), 0, 1) * 255).astype(np.uint8)).resize(size, Image.BILINEAR)
-                entry["person"] = np.asarray(matte, dtype=np.float32) / 255.0
-                kps = keypoints_fn(img)
-                entry["head"] = None if kps is None else head_ellipse(kps, img.size, margin=0.15)
+            if lpips_fn is not None or body:
+                matte, kps = matte_fn(img), keypoints_fn(img)
+                if body:
+                    entry["body"] = measure_body(matte, kps).score
+                if lpips_fn is not None:
+                    entry["tensor"] = to_tensor(img.resize(size, Image.BICUBIC))
+                    small = Image.fromarray((np.clip(matte, 0, 1) * 255).astype(np.uint8)).resize(size, Image.BILINEAR)
+                    entry["person"] = np.asarray(small, dtype=np.float32) / 255.0
+                    entry["head"] = None if kps is None else head_ellipse(kps, img.size, margin=0.15)
             if face_fn is not None:
                 entry["face"] = face_fn(img)
             cache[path] = entry
@@ -213,8 +223,8 @@ def measure(args, rows, models=None):
     with torch.no_grad():
         for n, r in enumerate(rows, 1):
             cur, ref = load(r.path), load(refs[(r.prompt_idx, r.seed)].path)
-            if measure_fn is not None:
-                r.measure = float(measure_fn(cur["img"]))
+            value = cur["body"] if body else measure_fn(cur["img"]) if measure_fn is not None else None
+            r.measure = None if value is None or not math.isfinite(float(value)) else float(value)
             if lpips_fn is not None:
                 dist = lpips_fn(cur["tensor"], ref["tensor"])[0, 0].float().cpu().numpy()
                 r.lpips_bg = masked_lpips(dist, cur["person"], ref["person"])
@@ -227,6 +237,9 @@ def measure(args, rows, models=None):
                 r.face_sim = cosine(cur["face"], ref["face"])
             if n % 20 == 0:
                 print(f"measured {n}/{len(rows)}", flush=True)
+    unmeasured = sum(r.measure is None for r in rows) if (body or measure_fn) else 0
+    if unmeasured:
+        print(f"{unmeasured}/{len(rows)} images could not be measured (left out of the fit)")
     return rows
 
 

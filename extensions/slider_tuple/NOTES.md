@@ -519,3 +519,45 @@ pairs, `SEED=42`): **passes.**
 - Cost: 3 Turbo previews in 11-12 s (~3.9 s/image incl. the swap); training
   speed unchanged (4.6 s/step vs 4.45-4.54 before), so moving Raw to the CPU and
   back costs nothing visible per step. Peak memory was not recorded.
+
+### First weight-slider run (2026-10-20)
+
+`configs/krea2_weight_slider.yaml` on `datasets/weight_slider_tuples`
+(18 heavy/thin pairs, levels ±1, `level_norm: none`, rank 16, lr 1e-4,
+1000 steps, anchors at `anchor_prob` 0.5, Turbo previews). Debug dumps show
+the direction right (heavy +1, thin −1) and the tuple masks right. Total loss
+is flat (0.271 -> 0.270, normal: noise dominates the slider signal), the
+member losses equal (no real-vs-edit gap), and `slider/anchor_loss` rose
+5e-5 -> 3.4e-4, so the LoRA did move. Turbo samples: weak effect (the man
+at +1 a little heavier at step 1000, the woman hardly), plus scene drift at
+±1 (the storefront changes).
+
+### Body-width measure and what it found in the weight data (2026-10-20)
+
+`body_measure.py`: mean silhouette width (Sapiens2 matte, connected region
+around the torso) over rows 0.15-1.5 torso lengths below the shoulder
+midpoint, divided by the shoulder-to-hip distance (Keypoint R-CNN). A 2D
+proxy instead of the body-warp handoff's SMPL fitting: no new dependencies,
+and the sweep only compares an image with its own m = 0 render, where pose
+and framing are nearly fixed. Single-image SMPL estimators also regress
+toward average shape, which hurts most on exactly these bodies. The fitting
+stays the next step if the 2D measure proves too noisy or for absolute
+levels (body-warp handoff, W0 + fit/measure only).
+
+`scripts/measure_tuples.py` on the 20 tuples:
+
+- heavy > thin in **19/19** measurable tuples (one heavy and two originals
+  have hidden hips). Spearman(level, score) over all members is only 0.25,
+  as expected: absolute widths vary with pose and view across photos.
+- **The heavy edits barely changed the body:** heavy - original median
+  -0.001 (-0.1%), range -0.03..+0.05; thin - original median -0.097 (-9.2%),
+  range -0.23..-0.03. Visual check of the previews agrees (e.g.
+  `789572eb...`: heavy and original look the same). The originals are
+  already heavy, so the editor made little change upward.
+- **Consequence for training:** the pairs are effectively "original vs
+  thinner". With ±1 levels the LoRA-off point is the heavy-thin midpoint,
+  so `--m 1` is trained to move only about half the original-thin difference,
+  ~5% width. That fits the weak samples. Options: heavier edits, measured
+  levels (`--out --add-original`, `level_norm: median_span`, so m = 1 is one
+  median span), and sweeping to m = 2-3 to see whether the direction is
+  learned at all.
