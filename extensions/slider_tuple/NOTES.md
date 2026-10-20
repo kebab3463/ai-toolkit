@@ -443,3 +443,35 @@ acceptance run (`--zero-lora`): pending.
 
 `scripts/tuples_to_pairs.py` prepares the M5 tuples-vs-pairs comparison
 (each tuple reduced to its highest and lowest member, everything else equal).
+
+### Paste-back of head and background (2026-10-20)
+
+The handoff's dataset contract wants head and background pasted back from
+the original into every member. `scripts/paste_back.py` does it for folders
+of edits (one subfolder per level) plus originals, writing a tuple dataset
+(members in the original's frame, `original`, one tuple mask, manifest,
+report, previews). Algorithm in `paste_back.py`; lessons from the first real
+run (20 heavy/thin pairs, all fixed and regression-tested):
+
+- **Don't trust ECC.** It diverged to 250-12000 px transforms on
+  person-filled / low-texture frames and, on heads, settled about 1 px off
+  while reporting 0.998. Registration candidates are bounded and scored by
+  our own background NCC; head alignment uses template match + masked-NCC
+  search, with ECC affine kept only if it raises that NCC.
+- **Profile and back views** collapse ear/eye distances; head size takes the
+  largest estimate including face-to-shoulder distance.
+- **Keep only the member's own body (+ the original's)**, never all members'
+  bodies, or the thinner member shows a ghost of the heavier outline.
+- **Tone-match each member to the original** (low-frequency field from
+  shared background) before compositing; keep blends narrow (4 levels) with
+  the seam 2% of the short side outside the bodies, or wide low-frequency
+  bands smear nearby body content into the background.
+
+Data (`datasets/weight_slider_data` -> `datasets/weight_slider_tuples`):
+registrations <= 11 px, all 40 heads pasted (head NCC 0.90-0.999), faces
+reviewed visually on all 20 pairs. Known limits: long hair outside the head
+ellipse stays the editor's per member; where the original's body covered
+background that a thinner member shows, only the editor's reconstruction
+exists (visible as a narrow strip in heavy - thin differences, e.g.
+`v3jf2w2lrvih1`). Captions are a placeholder until the user's captions
+arrive (`--captions <dir>` re-run rewrites only the manifest).
