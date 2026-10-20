@@ -19,12 +19,13 @@ from extensions.slider_tuple.sweep import (
 )
 
 
-def rows_for(measure_fn, lpips_fn=lambda m: 0.0, face_fn=lambda m: 1.0, seeds=(1, 2), path="x.png"):
+def rows_for(measure_fn, lpips_fn=lambda m: 0.0, face_fn=lambda m: 1.0, face_lpips_fn=lambda m: 0.0,
+             seeds=(1, 2), path="x.png"):
     rows = []
     for seed in seeds:
         for m in DEFAULT_MULTIPLIERS + DEFAULT_DIAGNOSTIC:
-            rows.append(SweepRow(prompt_idx=0, prompt="p", seed=seed, m=m, path=path,
-                                 measure=measure_fn(m, seed), lpips_bg=lpips_fn(m), face_sim=face_fn(m)))
+            rows.append(SweepRow(prompt_idx=0, prompt="p", seed=seed, m=m, path=path, measure=measure_fn(m, seed),
+                                 lpips_bg=lpips_fn(m), face_lpips=face_lpips_fn(m), face_sim=face_fn(m)))
     return rows
 
 
@@ -53,6 +54,7 @@ def test_zero_lora_sweep_summarizes_to_no_effect():
     s = summarize(rows_for(lambda m, seed: 3.0 + 0.1 * seed))
     assert s.positive["slope"] == pytest.approx(0.0, abs=1e-12)
     assert s.positive["worst_lpips_bg"] == 0.0 and s.positive["min_face_sim"] == 1.0
+    assert s.positive["worst_face_lpips"] == 0.0
     assert s.positive["intercept_minus_m0"] == pytest.approx(0.0, abs=1e-12)
     assert s.flags == []
 
@@ -96,7 +98,7 @@ def test_csv_roundtrip_and_contact_sheet(tmp_path):
     rows[0].face_sim = None
     path = write_csv(rows, str(tmp_path / "out" / "sweep.csv"))
     back = read_csv(path)
-    assert [(r.m, r.measure, r.face_sim) for r in back] == [(r.m, r.measure, r.face_sim) for r in rows]
+    assert [(r.m, r.measure, r.face_lpips, r.face_sim) for r in back] == [(r.m, r.measure, r.face_lpips, r.face_sim) for r in rows]
     sheet = Image.open(contact_sheet(back, str(tmp_path / "out" / "sheet.png"), thumb=32))
     assert sheet.size == (32 * 9, (32 + 28) * 1)
 
@@ -107,3 +109,21 @@ def test_load_callable():
         load_callable("math.sqrt")
     with pytest.raises(ValueError, match="not a callable"):
         load_callable("math:pi")
+
+
+def test_head_crop_box_is_square_padded_and_clipped():
+    from extensions.slider_tuple.sweep import head_crop_box
+    a = np.zeros((100, 120)); a[10:30, 40:60] = 1
+    b = np.zeros((100, 120)); b[14:34, 44:64] = 1  # the head moved a little
+    x0, y0, x1, y1 = head_crop_box([a, b], pad=0.0)
+    assert (x0, y0, x1, y1) == (40, 10, 64, 34) and x1 - x0 == y1 - y0  # union x 40-63, y 10-33
+    assert head_crop_box([np.zeros((10, 10))]) is None
+    edge = np.zeros((50, 50)); edge[0:10, 0:10] = 1
+    assert head_crop_box([edge], pad=1.0)[:2] == (0, 0)
+
+
+def test_face_lpips_in_summary_and_flags():
+    s = summarize(rows_for(lambda m, seed: m, face_lpips_fn=lambda m: 0.3 if m == -1 else 0.02))
+    assert s.positive["worst_face_lpips"] == pytest.approx(0.02)
+    assert s.diagnostic["face_lpips_at_-1"] == pytest.approx(0.3)
+    assert any("face LPIPS at m=-1" in f for f in s.flags)

@@ -6,8 +6,12 @@ A sweep renders prompts x seeds x multipliers. Every image gets:
   PIL image -> float);
 - ``lpips_bg``: LPIPS to the same prompt/seed at m = 0, outside the union of
   both images' person masks (a changing body outline is not a side effect);
-- ``face_sim``: cosine similarity of face embeddings to m = 0
-  (``--face module:function``, PIL image -> 1-D embedding or None).
+- ``face_lpips``: LPIPS between the head crops of this image and m = 0 (head
+  boxes from keypoints on both images), the built-in face-change metric: it
+  counts any visible change to the face, including expression or lighting;
+- ``face_sim``: optional identity metric, cosine similarity of face
+  embeddings to m = 0 (``--face module:function``, PIL image -> 1-D
+  embedding or None).
 
 The summary fits measure against m over the positive range (slope, R^2,
 Spearman rho, intercept vs the m = 0 value) and reports the worst side effects;
@@ -30,7 +34,7 @@ from scipy import stats
 
 DEFAULT_MULTIPLIERS = [round(0.25 * i, 2) for i in range(7)]  # 0 ... 1.5
 DEFAULT_DIAGNOSTIC = [-0.5, -1.0]
-CSV_FIELDS = ["prompt_idx", "prompt", "seed", "m", "measure", "lpips_bg", "face_sim", "path"]
+CSV_FIELDS = ["prompt_idx", "prompt", "seed", "m", "measure", "lpips_bg", "face_lpips", "face_sim", "path"]
 
 
 @dataclass
@@ -42,6 +46,7 @@ class SweepRow:
     path: str
     measure: Optional[float] = None
     lpips_bg: Optional[float] = None
+    face_lpips: Optional[float] = None
     face_sim: Optional[float] = None
 
 
@@ -69,6 +74,18 @@ def masked_lpips(distance_map: np.ndarray, person_a: np.ndarray, person_b: np.nd
     background = 1.0 - np.maximum(person_a, person_b)
     total = background.sum()
     return float((distance_map * background).sum() / total) if total > 0 else None
+
+
+def head_crop_box(head_masks: Sequence[np.ndarray], pad: float = 0.15):
+    """Square (x0, y0, x1, y1) around the union of head masks (H x W), padded; None if empty."""
+    union = np.maximum.reduce([np.asarray(m) > 0.5 for m in head_masks])
+    ys, xs = np.nonzero(union)
+    if len(xs) == 0:
+        return None
+    h, w = union.shape
+    cx, cy = (xs.min() + xs.max() + 1) / 2, (ys.min() + ys.max() + 1) / 2
+    half = max(xs.max() - xs.min() + 1, ys.max() - ys.min() + 1) * (1 + pad) / 2
+    return (int(max(0, cx - half)), int(max(0, cy - half)), int(min(w, cx + half)), int(min(h, cy + half)))
 
 
 def fit(ms: Sequence[float], values: Sequence[float]) -> Dict[str, Optional[float]]:
@@ -124,6 +141,7 @@ def summarize(rows: Sequence[SweepRow], margin: float = 0.05) -> SweepSummary:
         "slope": line["slope"], "r2": line["r2"], "spearman": line["spearman"],
         "intercept": line["intercept"], "measure_at_0": _at(pos, 0.0, "measure"),
         "worst_lpips_bg": _worst([r.lpips_bg for r in pos]),
+        "worst_face_lpips": _worst([r.face_lpips for r in pos]),
         "min_face_sim": _worst([r.face_sim for r in pos], worst=min),
     }
     if s.positive["intercept"] is not None and s.positive["measure_at_0"] is not None:
@@ -132,13 +150,17 @@ def summarize(rows: Sequence[SweepRow], margin: float = 0.05) -> SweepSummary:
     s.diagnostic = {
         "measure_at_-1": _at(neg, -1.0, "measure"),
         "worst_lpips_bg": _worst([r.lpips_bg for r in neg]),
+        "worst_face_lpips": _worst([r.face_lpips for r in neg]),
         "min_face_sim": _worst([r.face_sim for r in neg], worst=min),
         "lpips_bg_at_-1": _at(neg, -1.0, "lpips_bg"), "lpips_bg_at_+1": _at(pos, 1.0, "lpips_bg"),
+        "face_lpips_at_-1": _at(neg, -1.0, "face_lpips"), "face_lpips_at_+1": _at(pos, 1.0, "face_lpips"),
         "face_sim_at_-1": _at(neg, -1.0, "face_sim"), "face_sim_at_+1": _at(pos, 1.0, "face_sim"),
     }
     d = s.diagnostic
     if d["lpips_bg_at_-1"] is not None and d["lpips_bg_at_+1"] is not None and d["lpips_bg_at_-1"] > d["lpips_bg_at_+1"] + margin:
         s.flags.append(f"background LPIPS at m=-1 ({d['lpips_bg_at_-1']:.4g}) exceeds m=+1 ({d['lpips_bg_at_+1']:.4g}) by more than {margin}")
+    if d["face_lpips_at_-1"] is not None and d["face_lpips_at_+1"] is not None and d["face_lpips_at_-1"] > d["face_lpips_at_+1"] + margin:
+        s.flags.append(f"face LPIPS at m=-1 ({d['face_lpips_at_-1']:.4g}) exceeds m=+1 ({d['face_lpips_at_+1']:.4g}) by more than {margin}")
     if d["face_sim_at_-1"] is not None and d["face_sim_at_+1"] is not None and d["face_sim_at_-1"] < d["face_sim_at_+1"] - margin:
         s.flags.append(f"face similarity at m=-1 ({d['face_sim_at_-1']:.4g}) is below m=+1 ({d['face_sim_at_+1']:.4g}) by more than {margin}")
     return s
@@ -160,7 +182,8 @@ def read_csv(path: str) -> List[SweepRow]:
     with open(path, newline="", encoding="utf-8") as f:
         return [
             SweepRow(prompt_idx=int(d["prompt_idx"]), prompt=d["prompt"], seed=int(d["seed"]), m=float(d["m"]),
-                     path=d["path"], measure=num(d["measure"]), lpips_bg=num(d["lpips_bg"]), face_sim=num(d["face_sim"]))
+                     path=d["path"], measure=num(d["measure"]), lpips_bg=num(d["lpips_bg"]),
+                     face_lpips=num(d.get("face_lpips")), face_sim=num(d["face_sim"]))
             for d in csv.DictReader(f)
         ]
 
@@ -182,8 +205,10 @@ def contact_sheet(rows: Sequence[SweepRow], out_path: str, thumb: int = 256) -> 
             parts.append(f"v={r.measure:.3g}")
         if r.lpips_bg is not None:
             parts.append(f"bg={r.lpips_bg:.3f}")
+        if r.face_lpips is not None:
+            parts.append(f"face={r.face_lpips:.3f}")
         if r.face_sim is not None:
-            parts.append(f"face={r.face_sim:.3f}")
+            parts.append(f"id={r.face_sim:.3f}")
         draw.text((x + 4, y + 2), " ".join(parts[:2]), fill="yellow")
         draw.text((x + 4, y + 14), " ".join(parts[2:]) or f"seed {r.seed}", fill="yellow")
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)

@@ -82,3 +82,38 @@ def test_raw_preset_and_prompt_sources(tmp_path):
     manifest = tmp_path / "held_out.jsonl"
     manifest.write_text(json.dumps({"id": "a", "caption": "photo of a person", "members": []}) + "\n")
     assert script.read_prompts(str(manifest)) == ["photo of a person"]
+
+
+def test_face_and_background_lpips_with_stub_models(tmp_path):
+    script = load_script()
+    out = tmp_path / "sweep"
+    base = np.full((64, 64, 3), 100, np.uint8)
+    face_changed = base.copy(); face_changed[8:20, 26:38] = 200     # only the face differs
+    rows = []
+    for m, image in ((0.0, base), (1.0, face_changed)):
+        path = script.image_path(str(out), 0, 1, m)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        Image.fromarray(image).save(path)
+        rows.append(script.SweepRow(prompt_idx=0, prompt="p", seed=1, m=m, path=path))
+
+    def lpips_fn(a, b):  # stand-in "LPIPS": per-pixel mean abs difference map
+        return (a - b).abs().mean(dim=1, keepdim=True)
+
+    def matte_fn(img):
+        person = np.zeros((64, 64), np.float32); person[5:64, 20:44] = 1.0
+        return person
+
+    def keypoints_fn(img):
+        kps = np.zeros((17, 3)); kps[3] = (27, 14, 5); kps[4] = (37, 14, 5); kps[0] = (32, 14, 5)
+        return kps
+
+    sys.argv, old = ["x", "--prompts", "p.txt", "--out", str(out), "--lpips-res", "64"], sys.argv
+    try:
+        args = script.parse_args()
+    finally:
+        sys.argv = old
+    script.measure(args, rows, models=(lpips_fn, matte_fn, keypoints_fn))
+    ref, changed = rows
+    assert ref.face_lpips == 0.0 and ref.lpips_bg == 0.0
+    assert changed.face_lpips > 0.05      # the face change is seen ...
+    assert changed.lpips_bg == 0.0        # ... and not counted as background
