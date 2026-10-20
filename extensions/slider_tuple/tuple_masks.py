@@ -23,10 +23,13 @@ def union(maps: Sequence[np.ndarray]) -> np.ndarray:
 def head_ellipse(keypoints: np.ndarray, size, min_score: float = 1.0, margin: float = 0.15) -> Optional[np.ndarray]:
     """Head region (H x W, 0/1) from one person's COCO keypoints, rows (x, y, score).
 
-    Width from the ear distance (x1.4 for hair), else eye distance (x3), else
-    shoulder width (x0.45); height 1.35 x width; centered a little above the
-    face keypoints (eyes sit near the middle of the head, hair adds height).
-    ``margin`` enlarges both axes. Returns None if no face keypoint is visible."""
+    The head width is the largest of: 1.4 x ear distance (hair), 3 x eye
+    distance, 0.45 x shoulder width, and the face-to-shoulder-midpoint distance
+    (about a head height) / 1.35. Taking the largest matters: in profile and
+    back views both ears (and eyes) land on nearly the same point, which alone
+    would shrink the head to a few pixels. Height is 1.35 x width, centered a
+    little above the face keypoints; ``margin`` enlarges both axes. Returns None
+    if no face keypoint is visible or nothing sizes the head."""
     width, height = size
     kp = np.asarray(keypoints, dtype=np.float64)
     visible = kp[:, 2] >= min_score
@@ -37,17 +40,20 @@ def head_ellipse(keypoints: np.ndarray, size, min_score: float = 1.0, margin: fl
     face = [i for i in (NOSE, L_EYE, R_EYE, L_EAR, R_EAR) if visible[i]]
     if not face:
         return None
-    ears, eyes, shoulders = dist(L_EAR, R_EAR), dist(L_EYE, R_EYE), dist(L_SHOULDER, R_SHOULDER)
-    if ears:
-        head_w = 1.4 * ears
-    elif eyes:
-        head_w = 3.0 * eyes
-    elif shoulders:
-        head_w = 0.45 * shoulders
-    else:
+    cx, cy = kp[face, 0].mean(), kp[face, 1].mean()
+    estimates = []
+    for value, factor in ((dist(L_EAR, R_EAR), 1.4), (dist(L_EYE, R_EYE), 3.0), (dist(L_SHOULDER, R_SHOULDER), 0.45)):
+        if value:
+            estimates.append(value * factor)
+    shoulders = [i for i in (L_SHOULDER, R_SHOULDER) if visible[i]]
+    if shoulders:
+        neck = float(np.hypot(cx - kp[shoulders, 0].mean(), cy - kp[shoulders, 1].mean()))
+        estimates.append(neck / 1.35)
+    if not estimates:
         return None
+    head_w = min(max(estimates), 0.6 * min(width, height))
     head_h = 1.35 * head_w
-    cx, cy = kp[face, 0].mean(), kp[face, 1].mean() - 0.05 * head_h
+    cy -= 0.05 * head_h
     rx, ry = head_w / 2 * (1 + margin), head_h / 2 * (1 + margin)
     ys, xs = np.mgrid[0:height, 0:width]
     return ((((xs - cx) / rx) ** 2 + ((ys - cy) / ry) ** 2) <= 1.0).astype(np.float32)

@@ -58,7 +58,7 @@ def parse_args(argv=None):
     p.add_argument("--captions", help="folder of <name>.txt captions")
     p.add_argument("--default-caption", default="a photo of a woman")
     p.add_argument("--background", type=float, default=0.2, help="loss mask weight outside body and head")
-    p.add_argument("--dilate", type=int, default=0, help="body dilation px before blending (0 = 1%% of the short side)")
+    p.add_argument("--dilate", type=int, default=0, help="body dilation px before blending (0 = 2%% of the short side)")
     p.add_argument("--seam", type=float, default=0, help="seam blur px (0 = 0.4%% of the short side)")
     p.add_argument("--head-margin", type=float, default=0.15)
     p.add_argument("--kp-score", type=float, default=1.0)
@@ -94,7 +94,8 @@ def process(stem, args, matte_fn, keypoints_fn):
     original = np.asarray(Image.open(find(os.path.join(args.root, args.original), stem)).convert("RGB"))
     h, w = original.shape[:2]
     short = min(h, w)
-    dilate = args.dilate or max(4, round(0.01 * short))
+    # the seam sits this far outside the bodies, so the blend band only ever sees background
+    dilate = args.dilate or max(4, round(0.02 * short))
     seam = args.seam or max(2.0, 0.004 * short)
 
     orig_body = matte_fn(Image.fromarray(original))
@@ -102,7 +103,7 @@ def process(stem, args, matte_fn, keypoints_fn):
     orig_people = np.maximum(orig_body, 0 if orig_head is None else orig_head)
     orig_outside = 1.0 - feather(orig_people, dilate_px=3 * dilate)
 
-    registered, bodies, rows = {}, [orig_body], []
+    registered, bodies, rows = {}, {}, []
     for name, _ in args.members:
         member = np.asarray(Image.open(find(os.path.join(args.root, name), stem)).convert("RGB"))
         mh, mw = member.shape[:2]
@@ -110,11 +111,11 @@ def process(stem, args, matte_fn, keypoints_fn):
         member_outside = 1.0 - feather(member_body, dilate_px=3 * dilate)
         alignment = register_member(original, member, orig_outside, member_outside)
         registered[name] = resample(member, alignment.matrix, (w, h))
-        bodies.append(resample(member_body, alignment.matrix, (w, h)))
+        bodies[name] = resample(member_body, alignment.matrix, (w, h))
         rows.append({"name": stem, "member": name, "registration": alignment.method,
                      "registration_max_shift_px": round(max_shift(alignment.matrix, (mw, mh)), 2),
                      "registration_score": round(alignment.score, 4)})
-    body_union = union(bodies)
+    body_union = union([orig_body] + list(bodies.values()))  # for the loss mask
 
     pasted, heads = {}, []
     for (name, _), row in zip(args.members, rows):
@@ -122,7 +123,10 @@ def process(stem, args, matte_fn, keypoints_fn):
         candidates = [m for m in (member_head, orig_head) if m is not None]
         head = union(candidates) if candidates else np.zeros((h, w), np.float32)
         heads.append(head)
-        result = paste_member(original, registered[name], body_union, head, dilate_px=dilate, seam_px=seam)
+        # each member keeps only its own body (plus the original's), so no other
+        # member's outline is left behind in its background
+        keep = np.maximum(bodies[name], orig_body)
+        result = paste_member(original, registered[name], keep, head, dilate_px=dilate, seam_px=seam)
         pasted[name] = result.image
         fit = result.head_alignment
         center = None if bbox(head) is None else ((bbox(head)[0] + bbox(head)[2]) / 2, (bbox(head)[1] + bbox(head)[3]) / 2)

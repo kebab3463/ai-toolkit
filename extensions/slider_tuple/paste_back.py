@@ -7,8 +7,12 @@ centering cancel it) and the members are consistent with each other.
 Per member (images uint8 RGB, masks float H x W in [0, 1]):
 
 1. Registration: the member is aligned to the original over the background
-   (outside the people): ORB features + RANSAC similarity, refined with ECC
-   (sub-pixel, affine). Under ``min_shift`` px of motion the member is used
+   (outside the people). Candidates: identity, an ORB + RANSAC similarity,
+   and coarse-to-fine ECC (affine) started from each. Every candidate must be
+   plausible (scale, rotation, displacement bounds) and is scored by masked
+   NCC over the background; the best wins, and identity unless something
+   beats it. (ECC alone can diverge to wild transforms on low-texture or
+   person-filled frames.) Under ``min_shift`` px of motion the member is used
    as is, without resampling.
 2. Head registration: the original's head is aligned onto the registered
    member's head: a normalized template match of the head core finds the
@@ -23,7 +27,13 @@ Per member (images uint8 RGB, masks float H x W in [0, 1]):
    (scale, rotation, shear, shift, correlation); otherwise the head is not
    pasted and the member keeps its own. A misaligned face is worse than an
    unpasted one.
-3. Composition by multi-band (Laplacian pyramid) blending: low frequencies
+3. Tone matching: the editor's large-scale tone shift is measured on pure
+   background (original - member where both show background), extended under
+   the person by normalized convolution, and removed from the whole member.
+   Otherwise background the editor regenerated where a body used to be shows
+   as a lighter/darker ring next to the pasted original, and the shift on the
+   body itself would differ between members.
+4. Composition by multi-band (Laplacian pyramid) blending: low frequencies
    cross a seam over a wide band (tone differences fade out), high
    frequencies over a narrow one (detail stays sharp). The member keeps its
    pixels inside the dilated union of all bodies (members and original),
@@ -73,7 +83,8 @@ def max_shift(matrix: np.ndarray, size) -> float:
 
 
 def resample(image: np.ndarray, matrix: np.ndarray, size) -> np.ndarray:
-    if np.allclose(matrix, IDENTITY):
+    """``image`` sampled into an output of ``size`` (w, h) through the sampling map."""
+    if np.allclose(matrix, IDENTITY) and image.shape[1] == size[0] and image.shape[0] == size[1]:
         return image.copy()
     return cv2.warpAffine(image, matrix, size, flags=cv2.INTER_CUBIC | cv2.WARP_INVERSE_MAP,
                           borderMode=cv2.BORDER_REFLECT)
@@ -117,22 +128,66 @@ def ecc_map(output_img, source_img, mask, init=None, motions=(cv2.MOTION_AFFINE,
     return w.astype(np.float64), float(score)
 
 
+def masked_ncc(member, original, mask, matrix) -> float:
+    """Pearson correlation over ``mask`` between the member and the original sampled through ``matrix``."""
+    h, w = member.shape[:2]
+    a = gray(member).astype(np.float64)[mask > 0.5]
+    b = gray(resample(original, matrix, (w, h))).astype(np.float64)[mask > 0.5]
+    a, b = a - a.mean(), b - b.mean()
+    denom = np.sqrt((a @ a) * (b @ b))
+    return float(a @ b / denom) if denom > 0 else 0.0
+
+
+def _scaled(matrix: np.ndarray, factor: float) -> np.ndarray:
+    """The same sampling map expressed in coordinates scaled by ``factor``."""
+    out = matrix.copy()
+    out[:, 2] *= factor
+    return out
+
+
+def ecc_coarse_to_fine(output_img, source_img, mask, init, scale: float = 0.25):
+    """ECC affine at ``scale`` (wider capture range), then refined at full resolution."""
+    h, w = output_img.shape[:2]
+    small = (max(16, round(w * scale)), max(16, round(h * scale)))
+    shrink = lambda a, interp=cv2.INTER_AREA: cv2.resize(a, small, interpolation=interp)
+    coarse = ecc_map(shrink(output_img), shrink(source_img), shrink(np.asarray(mask, np.float32), cv2.INTER_NEAREST),
+                     init=_scaled(init, scale))
+    start = init if coarse is None else _scaled(coarse[0], 1 / scale)
+    fine = ecc_map(output_img, source_img, mask, init=start)
+    return None if fine is None else fine[0]
+
+
+def plausible(matrix: np.ndarray, size, max_shift_px: float, max_scale_dev: float = 0.05, max_rot: float = 2.0) -> bool:
+    a = matrix[:, :2]
+    sx, sy = np.linalg.norm(a[:, 0]), np.linalg.norm(a[:, 1])
+    rot = abs(np.degrees(np.arctan2(a[1, 0], a[0, 0])))
+    return (np.isfinite(matrix).all() and abs(sx - 1) <= max_scale_dev and abs(sy - 1) <= max_scale_dev
+            and rot <= max_rot and max_shift(matrix, size) <= max_shift_px)
+
+
 def register_member(original, member, original_outside, member_outside, min_shift: float = 0.25,
-                    min_inliers: int = 30) -> Alignment:
-    """Sampling map original frame -> member, fitted on the background."""
+                    max_shift_frac: float = 0.03, min_gain: float = 0.001, min_inliers: int = 12) -> Alignment:
+    """Sampling map original frame -> member, fitted and validated on the background."""
     h, w = original.shape[:2]
+    limit = max_shift_frac * min(h, w)
+    candidates = [("identity", IDENTITY.copy(), 0)]
     orb = orb_map(original, member, original_outside, member_outside)
-    init = orb.matrix if orb is not None and orb.inliers >= min_inliers else IDENTITY
-    refined = ecc_map(original, member, original_outside, init=init)
-    if refined is not None:
-        fit = Alignment(refined[0], "ecc", score=refined[1], inliers=0 if orb is None else orb.inliers)
-    elif orb is not None and orb.inliers >= min_inliers:
-        fit = orb
-    else:
-        return Alignment(IDENTITY.copy(), "identity")
-    if max_shift(fit.matrix, (w, h)) < min_shift:
-        return Alignment(IDENTITY.copy(), "identity", score=fit.score, inliers=fit.inliers)
-    return fit
+    if orb is not None and orb.inliers >= min_inliers:
+        candidates.append(("orb", orb.matrix, orb.inliers))
+    for _, init, inliers in list(candidates):
+        refined = ecc_coarse_to_fine(original, member, original_outside, init)
+        if refined is not None:
+            candidates.append(("ecc", refined, inliers))
+
+    scored = []
+    for method, matrix, inliers in candidates:
+        if method == "identity" or plausible(matrix, (w, h), limit):
+            scored.append((masked_ncc(original, member, original_outside, matrix), method, matrix, inliers))
+    identity_ncc = scored[0][0]
+    ncc, method, matrix, inliers = max(scored, key=lambda c: c[0])
+    if method == "identity" or ncc < identity_ncc + min_gain or max_shift(matrix, (w, h)) < min_shift:
+        return Alignment(IDENTITY.copy(), "identity", score=identity_ncc)
+    return Alignment(matrix, method, score=ncc, inliers=inliers)
 
 
 def bbox(mask: np.ndarray, pad: float = 0.0):
@@ -183,16 +238,6 @@ def template_shift(member, original, core, search_px: int):
     scores = cv2.matchTemplate(region, tpl, cv2.TM_CCOEFF_NORMED)
     _, peak, _, (px, py) = cv2.minMaxLoc(scores)
     return float(sx0 + px - x0), float(sy0 + py - y0), float(peak)
-
-
-def masked_ncc(member, original, mask, matrix) -> float:
-    """Pearson correlation over ``mask`` between the member and the original sampled through ``matrix``."""
-    h, w = member.shape[:2]
-    a = gray(member).astype(np.float64)[mask > 0.5]
-    b = gray(resample(original, matrix, (w, h))).astype(np.float64)[mask > 0.5]
-    a, b = a - a.mean(), b - b.mean()
-    denom = np.sqrt((a @ a) * (b @ b))
-    return float(a @ b / denom) if denom > 0 else 0.0
 
 
 def refine_translation(member, original, mask, tx: float, ty: float, start: float = 0.5, stop: float = 1 / 16):
@@ -282,32 +327,75 @@ def pyramid_blend(source: np.ndarray, target: np.ndarray, alpha: np.ndarray, lev
     return np.clip(np.round(out), 0, 255).astype(np.uint8)[:h, :w]
 
 
+def tone_correction(original, member, background, sigmas=(0.03, 0.12)) -> np.ndarray:
+    """Smooth per-channel field (H x W x 3, float) that maps the member's
+    large-scale tone onto the original's.
+
+    Measured as original - member over ``background`` (both show background),
+    then extended everywhere by normalized convolution: a Gaussian at each of
+    ``sigmas`` (fractions of the short side), finer scales winning where they
+    have enough support, so the field reaches deep inside large bodies."""
+    h, w = original.shape[:2]
+    weight = (np.asarray(background) > 0.5).astype(np.float32)
+    diff = (original.astype(np.float32) - member.astype(np.float32)) * weight[..., None]
+    field = np.zeros((h, w, 3), np.float32)
+    filled = np.zeros((h, w), np.float32)
+    for frac in sigmas:
+        sigma = max(2.0, frac * min(h, w))
+        support = cv2.GaussianBlur(weight, (0, 0), sigma)
+        estimate = cv2.GaussianBlur(diff, (0, 0), sigma) / np.maximum(support, 1e-6)[..., None]
+        trust = np.clip(support / 0.2, 0.0, 1.0) * (1.0 - filled)  # 20% background nearby = fully trusted
+        field += estimate * trust[..., None]
+        filled += trust
+    if filled.max() > 0:  # anything still unsupported: the mean background difference
+        mean = diff.sum(axis=(0, 1)) / max(weight.sum(), 1.0)
+        field += mean * (1.0 - np.clip(filled, 0, 1))[..., None]
+    return field
+
+
+def tone_match(original, member, background, sigmas=(0.03, 0.12)) -> np.ndarray:
+    corrected = member.astype(np.float32) + tone_correction(original, member, background, sigmas)
+    return np.clip(np.round(corrected), 0, 255).astype(np.uint8)
+
+
 @dataclass
 class PasteResult:
     image: np.ndarray
     head_alignment: Optional[Alignment]  # None: head not pasted
 
 
-def paste_member(original, member, body_union, head_mask, dilate_px: int = 12, seam_px: float = 4,
-                 align_head: bool = True) -> PasteResult:
+def paste_member(original, member, keep_region, head_mask, dilate_px: int = 12, seam_px: float = 4,
+                 align_head: bool = True, background_levels: int = 4, head_levels: int = 4) -> PasteResult:
     """Original's head (aligned) and background into a member, all in the original's frame.
 
     ``member`` must already be registered to the original (register_member +
-    resample); body_union covers every member's and the original's body."""
+    resample). ``keep_region`` is where the member keeps its own pixels: its
+    own body plus the original's body (where the original shows a person, its
+    pixels cannot serve as background). Using every member's body here instead
+    would leave each member's regenerated background inside the other members'
+    outlines, a ghost of the heavier silhouette in the thinner image.
+
+    Two multi-band passes: body/background, then the aligned head. Tone
+    differences are removed by tone_match first, so both blends stay narrow
+    (2**levels px): a wide low-frequency band reached past the dilated seam and
+    smeared nearby body content (the original's arm) into the background as a
+    soft ghost."""
     h, w = original.shape[:2]
     head_fit = head_alignment(original, member, head_mask) if align_head and np.any(head_mask > 0.5) else None
 
-    source = original
-    head_alpha = np.zeros((h, w), np.float32)
-    if head_fit is not None:
-        # original moved onto the member's head inside the (dilated) head, unmoved
-        # outside, joined by a multi-band blend so a local head shift leaves no seam
-        moved = resample(original, head_fit.matrix, (w, h))
-        source = pyramid_blend(moved, original, feather(head_mask, dilate_px=dilate_px, blur_px=seam_px))
-        head_alpha = feather(head_mask, blur_px=seam_px)
+    # remove the editor's large-scale tone shift, measured where both show background
+    background = 1.0 - feather(np.maximum(keep_region, head_mask), dilate_px=3 * dilate_px)
+    member = tone_match(original, member, background)
 
-    take_original = np.maximum(1.0 - feather(body_union, dilate_px=dilate_px), head_alpha)
-    if head_fit is None:
-        take_original = take_original * (1.0 - feather(head_mask, dilate_px=dilate_px))  # keep the member's head
-    take_original = cv2.GaussianBlur(take_original, (0, 0), max(1.0, seam_px / 2))
-    return PasteResult(image=pyramid_blend(source, member, take_original), head_alignment=head_fit)
+    keep = feather(keep_region, dilate_px=dilate_px)
+    if head_fit is None:  # keep the member's own head too
+        keep = np.maximum(keep, feather(head_mask, dilate_px=dilate_px))
+    take_original = cv2.GaussianBlur(1.0 - keep, (0, 0), max(1.0, seam_px / 2))
+    image = pyramid_blend(original, member, take_original, levels=background_levels)
+
+    # head pass: the original moved onto the member's head, or (if it could not be
+    # aligned) the member's own head restored without the wide pass's tone mixing
+    head_source = member if head_fit is None else resample(original, head_fit.matrix, (w, h))
+    if np.any(head_mask > 0.5):
+        image = pyramid_blend(head_source, image, feather(head_mask, blur_px=seam_px), levels=head_levels)
+    return PasteResult(image=image, head_alignment=head_fit)

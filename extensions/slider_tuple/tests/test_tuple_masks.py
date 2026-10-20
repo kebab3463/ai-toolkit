@@ -38,9 +38,19 @@ def test_head_ellipse_fallbacks_and_missing_face():
     by_eyes = head_ellipse(kps(l_eye=(46, 30), r_eye=(54, 30)), (100, 100), margin=0.0)
     assert by_eyes.any(axis=0).sum() in (23, 24, 25)       # 3 x eye distance 8
     by_shoulders = head_ellipse(kps(nose=(50, 30), l_shoulder=(30, 60), r_shoulder=(70, 60)), (100, 100), margin=0.0)
-    assert by_shoulders.any(axis=0).sum() in (17, 18, 19)  # 0.45 x shoulder width 40
+    # max(0.45 x shoulder width 40 = 18, neck 30 / 1.35 = 22.2)
+    assert by_shoulders.any(axis=0).sum() in (21, 22, 23)
     assert head_ellipse(kps(l_shoulder=(30, 60), r_shoulder=(70, 60)), (100, 100)) is None  # no face point
     assert head_ellipse(kps(nose=(50, 30)), (100, 100)) is None                           # nothing to size it
+
+
+def test_head_ellipse_in_profile_is_not_collapsed():
+    # profile / back view: both ears and both eyes land on nearly the same point
+    k = kps(nose=(52, 30), l_eye=(51, 28), r_eye=(52, 28), l_ear=(48, 29), r_ear=(49, 29),
+            l_shoulder=(45, 62), r_shoulder=(55, 62))
+    head = head_ellipse(k, (100, 100), margin=0.0)
+    width = head.any(axis=0).sum()
+    assert width >= 20  # from the neck (~33 px / 1.35), not the 1-3 px ear / eye distances
     low = kps(l_ear=(40, 31), r_ear=(60, 31))
     low[3, 2] = 0.5  # left ear below the score threshold -> no ear distance, no eyes -> None
     assert head_ellipse(low, (100, 100), min_score=1.0) is None

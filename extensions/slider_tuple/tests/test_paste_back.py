@@ -152,3 +152,66 @@ def test_head_shift_accuracy_across_shifts(global_shift, head_shift):
     if alignment.method == "identity":  # sub-threshold global motion is left in place, so the head carries it
         hx, hy = hx + gx, hy + gy
     assert head.shift_at(HEAD_CENTER[0] + hx, HEAD_CENTER[1] + hy) == pytest.approx((hx, hy), abs=0.15)
+
+
+def test_diverged_ecc_is_rejected(monkeypatch):
+    """Regression: ECC diverged to transforms moving pixels by 250-12000 px on real
+    frames and was accepted; implausible candidates must lose to plausible ones."""
+    import extensions.slider_tuple.paste_back as pb
+
+    wild = np.array([[1.9, 0.4, 900.0], [-0.3, 2.2, -1500.0]])
+    monkeypatch.setattr(pb, "ecc_coarse_to_fine", lambda *a, **k: wild)
+    original, member, _, _, _, outside = scene()
+    alignment = register_member(original, member, outside, moved(outside, 3.0, -2.0) > 0.5)
+    assert alignment.method == "orb"
+    assert alignment.matrix[:, 2] == pytest.approx([3.0, -2.0], abs=0.5)
+
+
+def test_featureless_background_falls_back_to_identity():
+    flat = np.full((SIZE, SIZE, 3), 128, np.uint8)
+    other = flat.copy()
+    other[100:140, 100:140] = 200  # a "person", masked out
+    outside = np.ones((SIZE, SIZE), np.float32)
+    outside[90:150, 90:150] = 0
+    alignment = register_member(flat, other, outside, outside)
+    assert alignment.method == "identity"
+
+
+def test_identity_resample_honors_the_output_size():
+    image = textured(8)[:300]
+    out = resample(image, np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]), (SIZE, 310))
+    assert out.shape[:2] == (310, SIZE)
+    assert np.array_equal(out[:300], image)
+
+
+def test_no_ghost_of_another_members_outline():
+    """Regression: keeping every member's body region left the thin member's
+    regenerated background inside the heavy outline (a visible halo)."""
+    o, _, _, _, _, outside = scene(body_w=80, noise_seed=10)
+    _, thin, _, head_t, _, outside_t = scene(body_w=35, noise_seed=11)
+    _, thin_r = register(o, thin, np.minimum(outside, outside_t))
+    heavy_body = ellipse(BODY_CENTER, (80, 90))
+    thin_body = ellipse(BODY_CENTER, (35, 90))
+    orig_body = ellipse(BODY_CENTER, (55, 90))
+    pasted = paste_member(o, thin_r, np.maximum(thin_body, orig_body), head_t, dilate_px=6, seam_px=3).image
+    ring = (heavy_body > 0) & (feather(np.maximum(thin_body, orig_body), dilate_px=18) < 0.5)
+    assert ring.sum() > 500
+    to_original = np.abs(pasted.astype(np.float32) - o.astype(np.float32))[ring].mean()
+    to_own_background = np.abs(thin_r.astype(np.float32) - o.astype(np.float32))[ring].mean()
+    assert to_own_background > 5 and to_original < 1.0
+
+
+def test_tone_match_removes_a_smooth_shift_including_under_the_person():
+    from extensions.slider_tuple.paste_back import tone_match
+    original = textured(9)
+    ys, xs = np.mgrid[0:SIZE, 0:SIZE]
+    shift = (12 + 10 * np.sin(xs / 90.0) + 6 * ys / SIZE)[..., None]  # smooth editor tone shift
+    member = np.clip(original.astype(np.float32) + shift, 0, 255).astype(np.uint8)
+    person = ellipse(BODY_CENTER, (60, 90))
+    background = 1 - feather(person, dilate_px=10)
+    matched = tone_match(original, member, background)
+    err = lambda a, region: np.abs(a.astype(np.float32) - original.astype(np.float32))[region].mean()
+    assert err(member, person > 0) > 10
+    assert err(matched, background > 0.5) < 2.0
+    # extended under the person too (extrapolated, so not exact: at least 3x smaller)
+    assert err(matched, person > 0) < err(member, person > 0) / 3
