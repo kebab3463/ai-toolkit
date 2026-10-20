@@ -4,6 +4,12 @@ Checked 2026-10-16 against upstream `0d19b26` (= `origin/main`) and the `mydev`
 branch rebased on it. Everything in the handoff's codebase map holds; this file
 records only what differs from the handoff or what it does not say.
 
+**Guiding doc.** Since 2026-10-19 development follows
+`docs/Handoff Tuple Slider Training for Krea 2 in an ai-toolkit Fork.md`, which
+replaces the earlier "Image-Pair Slider Training" handoff. Its F2 (centered
+multipliers from measured levels) superseded the first M4 implementation; see
+"M4 revised" below. Codebase map, M0-M3, F3 and F4 are unchanged.
+
 ## Workflow differences from the handoff
 
 - **Branch.** Work happens on `mydev`, not a separate `slider-tuples` branch.
@@ -240,12 +246,15 @@ Usage (see `tuples.py` / `manifest.py` docstrings for every key):
           resolution: [1024]
           cache_latents_to_disk: true
       slider:
-        members_per_step: 2          # or "all"
-        force_opposite_signs: false
-        zero_sum_weights: false
+        members_per_step: all        # or an int >= 2
+        level_norm: median_span      # kappa: median_span | max_span | none
+        min_span: 0.3                # in kappa units
+        weight_cap_pct: 95
         backward_per_member: false
         debug_dump_steps: 0
 ```
+
+(Keys as of the revised F2; see "M4 revised" below.)
 
 How it works: each tuple's first member (the anchor) becomes a dataloader item
 via a generated JSON dataset (`<run>/slider_tuple/dataset_<i>.json`, the
@@ -253,8 +262,8 @@ via a generated JSON dataset (`<run>/slider_tuple/dataset_<i>.json`, the
 flips and caches latents and text embeddings for it. At loss time the trainer
 loads the other members through the anchor file item's own resize/crop/flip
 path and caches their latents in memory per crop. Members are sampled per
-step, ordered by descending scale, and arranged in slots so a +/- pair is
-polarity's `[positive, negative]` batch.
+step, ordered by descending level, centered (see "M4 revised") and arranged in
+slots so a pair is polarity's `[positive, negative]` batch.
 
 Design notes and deviations:
 
@@ -264,7 +273,7 @@ Design notes and deviations:
   re-encodes its partner every step. Consequence: GPU loss curves cannot match
   polarity step for step (polarity consumes the RNG before noise/timesteps).
 - **Batch members per step.** All tuples in a batch train the same number of
-  members: `min(members_per_step, trainable count)` over the batch.
+  members: `min(members_per_step, member count)` over the batch.
 - **Restrictions (v1):** tuple datasets cannot be mixed with other datasets
   or be `is_reg`; they need buckets; augmentations, `alpha_mask`, video and an
   explicit `folder_path` / `dataset_path` are rejected. Manifest masks are
@@ -274,7 +283,7 @@ Design notes and deviations:
   whatever flips the anchor file item ends up with, so they stay aligned
   either way. Candidate one-line upstream fix (M8).
 
-CPU verification (80 tests): a +/-1 tuple run through the real dataloader and
+First implementation, CPU verification (80 tests): a +/-1 tuple run through the real dataloader and
 the trainer equals `get_guided_loss_polarity` in loss and LoRA gradient on the
 same pair, noise and timestep (batch 1 and 2); members load bit-identical to
 upstream's image path for every flip combination; zero-sum weights give
@@ -301,6 +310,45 @@ person and the renders' own background variation). Same cost as polarity
 CPU equivalence tests plus this GPU smoke run; an exact fixed-input check on
 the real model (both losses on one batch, noise and timestep) is possible if
 stronger GPU evidence is wanted.
+
+### M4 revised: centered multipliers from measured levels (2026-10-19)
+
+Per the revised handoff's F2:
+
+- **Manifest:** members have `level` (measured), `role` (`real` | `edit`, at
+  most one real), optional `quality` in [0, 1] and `level_var` > 0; tuples may
+  have `quality` and `original` (untouched photo, metrics/dumps only). The
+  old `scale` / `weight` keys and the "scale 0 = untrained reference" idea are
+  gone: every member trains.
+- **Centering** (`centering.py`): per step, over the sampled members,
+  s_i = (a_i - a_w) / kappa (w-weighted mean), so sum(w_i s_i) = 0 exactly.
+  w_i = quality * 1/level_var, mean 1 per tuple; loss weight omega * w_i with
+  omega = tuple quality. A pair is +-delta/(2 kappa).
+- **kappa** (`level_norm`) over the training set; `min_span` (kappa units)
+  drops tuples and constrains sampled subsets; `weight_cap_pct` caps tuple
+  leverage omega * sum(w s^2). Dropped/capped tuples are printed at startup and
+  left out of the anchor dataset.
+- **Removed:** `zero_sum_weights`, `force_opposite_signs` (centering makes
+  both redundant). `slider_scale_normalize` is for F1 datasets only.
+- **Test hook:** `center_offset` (warns at startup).
+- **Logs:** `slider/weighted_scale_sum`, `slider/span` (kappa units),
+  `slider/loss_rank<r>` (rank 0 = highest level, normally the real photo),
+  `slider/members_per_step`; anchors still log `slider/anchor_loss`.
+- **Config naming:** the handoff's flat `slider_*` names live in the
+  process-level `slider:` block without the prefix (already in use; the
+  handoff marks names as proposals).
+
+Acceptance (CPU, 118 tests total): (1) pair 2 kappa apart, unit weights ==
+polarity at weight 1 in loss and LoRA gradient, through the real dataloader
+and trainer (batch 1 and 2); (2) identical images -> zero LoRA gradient for
+any weights; (3) levels (1.4, 0.9, -0.2), weights (1, 0.5, 1) -> scales
+(0.74, 0.24, -0.86)/kappa with zero weighted sum; (4) `center_offset` makes the
+shared-content gradient nonzero, and a pair offset by delta/2kappa gets no
+gradient from its lower member; (5) dropped and capped tuples reported at
+startup; (6) debug dump shows all members (with rank/role/level/multiplier)
+plus the original. The M4 GPU smoke result above still holds: for the +-1
+smoke pairs with `level_norm: none` the revised math gives the same
+multipliers.
 
 ### M5: masked loss (F3) and anchor preservation (F4) (2026-10-16)
 
