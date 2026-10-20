@@ -61,12 +61,16 @@ def slider_tuple_loss(
     train_config,
     backward_per_member: bool = False,
     slot_masks: Optional[Sequence[Optional[torch.Tensor]]] = None,
+    member_losses: Optional[List[List[float]]] = None,
 ) -> torch.Tensor:
     """slot_latents[j]: (B, ...) clean latents of slot j; slot_scales[j][b] and
     slot_weights[j][b]: LoRA multiplier and loss weight of tuple b's member in
     slot j; slot_masks[j]: (B, 1, H, W) pixel loss masks for slot j, or None
-    for unmasked. Returns the detached total loss (backward already done)."""
+    for unmasked. If ``member_losses`` is a list, it receives each slot's
+    per-item (masked, unweighted) MSE. Returns the detached total loss
+    (backward already done)."""
     m = len(slot_latents)
+    per_slot: List[Optional[List[float]]] = [None] * m
     dtype = get_torch_dtype(sd.torch_dtype)
     device = sd.device_torch
 
@@ -108,6 +112,7 @@ def slider_tuple_loss(
             if masks[j] is not None:
                 mse = mse * masks[j]
             per_item = mse.mean(dim=list(range(1, mse.dim())))
+            per_slot[j] = per_item.detach().tolist()
             total = total + (weights[j] * per_item).mean()
         return total
 
@@ -121,6 +126,8 @@ def slider_tuple_loss(
         loss = run(list(range(m)))
         loss.backward()
 
+    if member_losses is not None:
+        member_losses.extend(per_slot)
     loss = loss.detach()
     loss.requires_grad_(True)
     return loss
