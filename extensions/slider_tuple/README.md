@@ -66,15 +66,19 @@ datasets/<slider>_data/
   orig/<name>.png        the untouched photo
   heavy/<name>.png       one folder per level (any names)
   thin/<name>.png
-  captions/<name>.json   or <name>.txt (optional, can come later)
+  captions/<name>.json   or <name>.txt (optional, can come later; any folder)
 ```
 
 ```bash
 .venv/bin/python extensions/slider_tuple/scripts/paste_back.py \
     datasets/weight_slider_data datasets/weight_slider_tuples \
     --member heavy=1 --member thin=-1 --original orig \
-    --captions datasets/weight_slider_data/captions --preview
+    --captions datasets/weight_slider_tuples/captions_json --caption-key caption_long --preview
 ```
+
+(This is the exact command that built `datasets/weight_slider_tuples`; the
+images were made first without `--captions`, then the re-run with captions
+only rewrote the manifest.)
 
 - `--member NAME=LEVEL` per member folder. Levels are numbers on one scale:
   `+1/-1` for "more/less", or measured values (e.g. estimated BMI) if you

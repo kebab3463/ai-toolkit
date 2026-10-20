@@ -476,8 +476,18 @@ reviewed visually on all 20 pairs. Known limits: long hair outside the head
 ellipse stays the editor's per member; where the original's body covered
 background that a thinner member shows, only the editor's reconstruction
 exists (visible as a narrow strip in heavy - thin differences, e.g.
-`v3jf2w2lrvih1`). Captions are a placeholder until the user's captions
-arrive (`--captions <dir>` re-run rewrites only the manifest).
+`v3jf2w2lrvih1`).
+
+Captions (2026-10-20): the user's long captions
+(`weight_slider_tuples/captions_json/*.json`, `caption_long`; identical to
+`captions/*.txt`), 695-948 characters, ~200 tokens, well under Krea 2's
+512-token cap. Held out by `split_holdout.py` (seed 0):
+`8545b11fbbac7e7435d3e564e78ad083`, `tvbeats-MmdfvjpuR-E-unsplash`;
+18 tuples train. Commands: README.md, section 2.
+
+**To do after the first training tests:** a body-weight `--measure` for the
+sweep (e.g. body width from the Sapiens2 matte relative to head size), so
+the sweep reports linearity and not just side effects.
 
 ### F7: Turbo preview sampling while training on Raw (2026-10-20)
 
