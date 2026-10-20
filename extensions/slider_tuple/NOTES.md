@@ -399,3 +399,35 @@ anchors themselves. `slider/anchor_loss` is logged every step at ~5e-5
 anchor predictions yet, so the anchor has little to correct. Whether
 `anchor_strength` 1 is enough is for the full-length M5 comparison;
 `anchor_prob` < 1 trades preservation for speed. Plumbing **passes**.
+
+### M6 (in progress): F6 linearity sweep (2026-10-19)
+
+`scripts/slider_sweep.py` + `sweep.py`. Renders prompts x seeds x multipliers
+(default 0...1.5 step 0.25 plus the -0.5 / -1 diagnostic) with the LoRA
+attached through `toolkit/inference_lora.py` hooks (strength changes per
+image; a slider_tuple LoRA resolves 256/256 modules on Krea 2). Default is the
+Turbo deployment path (8 steps, CFG off, `model_kwargs.schedule_mu: 1.15`,
+which the Krea 2 pipeline already supports); `--raw` gives Raw sampling.
+Metrics: `--measure module:function` (user's attribute score), background
+LPIPS outside the union of Sapiens2 person mattes (`facebook/sapiens2-matting-1b`,
+downloaded on first use), and `--face module:function` (face embedding).
+Summary: slope, R^2, Spearman, fitted intercept vs the m = 0 value, worst
+side effects; the negative diagnostic is reported separately with flags when a
+side effect at -1 is worse than at +1 by `--margin`.
+
+- **Face embedding is pluggable, no built-in yet:** none of insightface /
+  facenet-pytorch / mediapipe is installed, and each adds a dependency with
+  trade-offs (insightface models are non-commercial; facenet-pytorch pins an
+  old torch). Decision pending with the user.
+- **"Value at m = 0 vs base":** with hook-attached LoRAs, m = 0 is the base
+  model exactly, so the summary compares the linear fit's intercept with the
+  measured m = 0 value (`intercept_minus_m0`), i.e. how linear the response
+  is near zero.
+
+CPU verification: metric/statistics tests, including "identical renders ->
+slope 0, LPIPS 0, face similarity 1" (the F6 acceptance criterion), and the
+script's measure/summary path end to end on pre-rendered images. GPU
+acceptance run (`--zero-lora`): pending.
+
+`scripts/tuples_to_pairs.py` prepares the M5 tuples-vs-pairs comparison
+(each tuple reduced to its highest and lowest member, everything else equal).
