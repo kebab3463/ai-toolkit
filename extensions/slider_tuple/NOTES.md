@@ -507,7 +507,15 @@ follows each prompt's `--m`; steps / CFG / mu come from `turbo_preview_steps`
   BigLove Turbo file loads on CPU in 7.3 s, memory-mapped (~1.2 GB RSS).
   `slider_sweep.py --model <that file>` uses the same loader.
 
-GPU acceptance (pending): `configs/dev/krea2_turbo_preview_f7.yaml` samples at
-step 0, where the LoRA is still zero, so the three `--m` previews must match
-a plain Turbo render of the same prompt and seed
-(`scripts/image_lpips.py`); also check peak memory with Raw offloaded.
+GPU acceptance (2026-10-20, `configs/dev/krea2_turbo_preview_f7.yaml`, smoke
+pairs, `SEED=42`): **passes.**
+
+- Step 0 (LoRA still zero): all three `--m -1/0/1` previews are
+  pixel-identical to a plain Turbo render of the same prompt and seed from
+  `slider_sweep.py --model <turbo file>` (LPIPS 0.00000, max |diff| 0), so the
+  trainer's preview path and the sweep sample the same way.
+- Step 20: `--m 0` still pixel-identical; `--m -1` / `+1` differ (LPIPS 0.134
+  / 0.094), so the hooks carry the trainee LoRA at each prompt's strength.
+- Cost: 3 Turbo previews in 11-12 s (~3.9 s/image incl. the swap); training
+  speed unchanged (4.6 s/step vs 4.45-4.54 before), so moving Raw to the CPU and
+  back costs nothing visible per step. Peak memory was not recorded.
