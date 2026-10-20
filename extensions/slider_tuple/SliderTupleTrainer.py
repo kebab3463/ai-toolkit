@@ -18,6 +18,7 @@ from .members import MemberLatentCache, dump_tuple, load_member_image, load_memb
 from .centering import TuplePlan, centered_scales, plan_tuples, sample_members, weighted_scale_sum
 from .scales import SliderDatasetOptions, apply_slider_scales, slider_options_by_config
 from .tuples import SliderTrainConfig, load_tuple_dataset, write_anchor_dataset
+from .turbo import TurboPreview
 
 # guidance types handled here; every other guidance_type goes to upstream unchanged
 SLIDER_GUIDANCE_TYPES = ("slider_tuple",)
@@ -54,6 +55,38 @@ class SliderTupleTrainer(SDTrainer):
         self.slider_anchor_embeds = []
         self.slider_anchor_images: List[str] = []
         self.slider_anchor_latents = MemberLatentCache()
+        self.slider_turbo: Optional[TurboPreview] = None
+        if slider_config.turbo_preview:
+            if not os.path.isfile(slider_config.turbo_preview):
+                raise ValueError(f"slider.turbo_preview: file not found: {slider_config.turbo_preview}")
+            self.slider_turbo = TurboPreview(
+                slider_config.turbo_preview,
+                steps=slider_config.turbo_preview_steps,
+                cfg=slider_config.turbo_preview_cfg,
+                mu=slider_config.turbo_preview_mu,
+                offload_raw=slider_config.turbo_preview_offload,
+            )
+
+    def sample(self, step=None, is_first=False):
+        """Upstream sampling, rendered on the Turbo DiT when slider.turbo_preview is set."""
+        if self.slider_turbo is None:
+            return super().sample(step, is_first)
+        original = self.sd.generate_images
+        lora_path = os.path.join(self.save_root, "slider_tuple", "turbo_preview_lora.safetensors")
+
+        def turbo_generate(configs, sampler=None, **kwargs):
+            print_acc(f"slider_tuple: Turbo preview ({len(configs)} images, {self.slider_turbo.steps} steps)")
+            self.slider_turbo.generate(
+                self.sd, configs, sampler,
+                save_lora=lambda path: self.network.save_weights(path, dtype=torch.float32),
+                lora_path=lora_path, generate_images=original,
+            )
+
+        self.sd.generate_images = turbo_generate
+        try:
+            return super().sample(step, is_first)
+        finally:
+            del self.sd.generate_images
 
     def setup_tuple_datasets(self):
         tuple_sets = []

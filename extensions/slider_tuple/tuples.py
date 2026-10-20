@@ -22,6 +22,12 @@ Process-level options live in a ``slider:`` block (centering.py has the math):
       anchor_prob: 1.0             # chance per step of adding the anchor loss
       anchor_max_multiplier: 1.0   # LoRA multiplier drawn from [-max, max]
       anchor_images: null          # folder of anchor images; default: the batch's latents
+      # Turbo previews (F7, turbo.py): sample with this Turbo DiT checkpoint instead of the Raw model
+      turbo_preview: null          # e.g. a ComfyUI int8_convrot .safetensors
+      turbo_preview_steps: 8
+      turbo_preview_cfg: 1.0       # Krea 2 CFG is 0-normalized: 1 = off
+      turbo_preview_mu: 1.15       # fixed schedule shift the distilled Turbo was trained at
+      turbo_preview_offload: true  # move the Raw DiT to CPU while sampling
 """
 
 import json
@@ -37,6 +43,7 @@ SLIDER_TRAIN_KEYS = {
     "members_per_step", "level_norm", "min_span", "weight_cap_pct", "backward_per_member", "center_offset",
     "debug_dump_steps",
     "anchor_strength", "anchor_prompts", "anchor_prob", "anchor_max_multiplier", "anchor_images",
+    "turbo_preview", "turbo_preview_steps", "turbo_preview_cfg", "turbo_preview_mu", "turbo_preview_offload",
 }
 
 
@@ -54,6 +61,11 @@ class SliderTrainConfig:
     anchor_prob: float = 1.0
     anchor_max_multiplier: float = 1.0
     anchor_images: Optional[str] = None
+    turbo_preview: Optional[str] = None
+    turbo_preview_steps: int = 8
+    turbo_preview_cfg: float = 1.0
+    turbo_preview_mu: float = 1.15
+    turbo_preview_offload: bool = True
 
     @property
     def anchors_enabled(self) -> bool:
@@ -87,6 +99,11 @@ class SliderTrainConfig:
             anchor_prob=number("anchor_prob", 1.0),
             anchor_max_multiplier=number("anchor_max_multiplier", 1.0),
             anchor_images=raw.get("anchor_images"),
+            turbo_preview=raw.get("turbo_preview"),
+            turbo_preview_steps=int(number("turbo_preview_steps", 8)),
+            turbo_preview_cfg=number("turbo_preview_cfg", 1.0),
+            turbo_preview_mu=number("turbo_preview_mu", 1.15),
+            turbo_preview_offload=bool(raw.get("turbo_preview_offload", True)),
         )
         if config.level_norm not in LEVEL_NORMS:
             raise ValueError(f"slider.level_norm must be one of {LEVEL_NORMS}, got {config.level_norm!r}")
@@ -102,6 +119,12 @@ class SliderTrainConfig:
             raise ValueError("slider.anchor_max_multiplier must be >= 0")
         if not all(isinstance(p, str) and p.strip() for p in config.anchor_prompts):
             raise ValueError("slider.anchor_prompts must be a list of non-empty strings")
+        if config.turbo_preview is not None and not (
+            isinstance(config.turbo_preview, str) and config.turbo_preview.endswith(".safetensors")
+        ):
+            raise ValueError("slider.turbo_preview must be a .safetensors checkpoint path")
+        if config.turbo_preview_steps < 1:
+            raise ValueError("slider.turbo_preview_steps must be >= 1")
         if config.anchors_enabled and not config.anchor_prompts:
             raise ValueError("slider.anchor_strength > 0 needs anchor_prompts")
         return config

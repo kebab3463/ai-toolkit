@@ -56,7 +56,8 @@ def floats(text):
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--model", default="krea/Krea-2-Turbo", help="Krea 2 checkpoint (hub id, folder or .safetensors)")
+    p.add_argument("--model", default="krea/Krea-2-Turbo",
+                   help="Krea 2 checkpoint: hub id, folder, .safetensors, or a ComfyUI int8_convrot .safetensors")
     p.add_argument("--lora", help="trained slider LoRA (.safetensors); omit to sweep the base model only")
     p.add_argument("--zero-lora", action="store_true", help="zero every LoRA delta after loading (acceptance check)")
     p.add_argument("--prompts", required=True, help="text file, one prompt per line, or a tuples.jsonl (captions)")
@@ -106,6 +107,7 @@ def render(args, prompts, seeds, multipliers):
     """Render every missing image; returns rows with paths."""
     import torch
 
+    from extensions.slider_tuple.turbo import is_comfy_quantized, load_krea2_dit
     from toolkit.config_modules import GenerateImageConfig, ModelConfig
     from toolkit.inference_lora import InferenceLoRA
     from toolkit.util.get_model import get_model_class
@@ -126,6 +128,9 @@ def render(args, prompts, seeds, multipliers):
     model_class = get_model_class(model_config)
     sd = model_class(device=args.device, model_config=model_config, dtype="bf16",
                      noise_scheduler=model_class.get_train_scheduler())
+    if is_comfy_quantized(args.model):
+        # e.g. a ComfyUI int8_convrot Turbo: strip its key prefix, keep the layers pre-quantized
+        sd._load_transformer = lambda: load_krea2_dit(args.model, sd.torch_dtype)
     sd.load_model()
 
     lora = None
