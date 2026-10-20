@@ -50,6 +50,12 @@ What a good tuple is (from the handoff's dataset contract):
   pose, framing, clothing, light and background, everything except the
   attribute. Edited images (e.g. heavier / thinner versions of one photo)
   work; the edit should change only the attribute.
+- **Put every member through the same edit pipeline**, including one
+  "pass-through" edit that asks for no change. That one stands in for the
+  original at its level. All members then carry the generator's look
+  equally, and centering cancels it. Paired with a real photo, the LoRA
+  would also learn "real -> synthetic". The weight data's `heavy/` folder is
+  such a pass-through (NOTES.md, "Run 2").
 - Faces and backgrounds identical across members: paste-back (below) does
   that for edits of an original photo.
 - **One caption per tuple, without the attribute.** Describe everything
@@ -137,19 +143,27 @@ Check that the edits actually change the attribute, and by how much:
   `measurements.csv` (also chest / waist / hip / thigh widths) and
   `measure_preview/<id>.jpg` (measured band shaded) next to the manifest.
 - **Look at the size of the changes, not just the order.** In the weight
-  data, heavy measured the same as the original (median −0.1%) and thin 9%
-  narrower, so the "heavy" edits added almost nothing (NOTES.md,
-  "Body-width measure").
-- Measured levels instead of ±1: `--out tuples_measured.jsonl`, optionally
-  `--add-original` (the original becomes a `real` member at its measured
-  level). Train that with `level_norm: median_span`, and run `split_holdout.py`
-  on it. Tuples with an unmeasurable image (shoulders or hips hidden) are left
-  out and listed.
+  data, thin measured 2-19% narrower than the pass-through edit, so a few
+  pairs barely differ, and ±1 levels train them as hard as the strong ones.
+  (The pass-through measured the same as the original, median −0.1%, which
+  confirms it changes nothing.)
+- **Measured levels instead of ±1** (the run-2 recipe, commands at the top of
+  `configs/krea2_weight_slider_measured.yaml`):
+  `--out <folder>/tuples.jsonl`, then `split_holdout.py` on it (`--ids` to
+  keep the same held-out tuples as an earlier run), then train with
+  `level_norm: median_span`. Each tuple then trains in proportion to how much
+  its edit changed the body, and m = 1 is one median tuple's change.
+  Tuples with an unmeasurable image (shoulders or hips hidden) are left out
+  and listed; the trainer drops spans under `min_span` × κ at startup.
+- `--add-original` also adds the real original as a `real` member. Use it only
+  when the other members are real photos too, or when real-vs-synthetic
+  differences don't matter. Next to pass-through edits it works against them.
 
 ## 3. Train
 
 ```bash
 cp extensions/slider_tuple/configs/krea2_weight_slider.yaml config/my_slider.yaml   # config/ is gitignored
+#   (or krea2_weight_slider_measured.yaml for measured levels)
 # edit the lines marked EDIT, then
 .venv/bin/python run.py config/my_slider.yaml
 ```
@@ -294,7 +308,9 @@ Dataset entries take `slider_tuples: <manifest>` with
 | `scripts/dev/make_band_masks.py` | placeholder masks for plumbing tests |
 | `scripts/dev/tuples_to_pairs.py` | reduce tuples to their extremes (tuples-vs-pairs comparison) |
 
-`configs/krea2_weight_slider.yaml` is the training template;
+`configs/krea2_weight_slider.yaml` (±1 levels) and
+`configs/krea2_weight_slider_measured.yaml` (measured levels) are the training
+templates;
 `configs/dev/` holds the milestone smoke and acceptance configs (NOTES.md).
 
 ### Code layout

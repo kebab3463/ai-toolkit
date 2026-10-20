@@ -598,3 +598,29 @@ scores 0.70-0.75; per-image noise `delta_sd` ~0.03-0.07.)
   original -> thinner (~9% width), split as ±1 around the midpoint. Yet
   the LoRA learned the opposite side better, so the data alone doesn't explain
   the asymmetry. Evidence is thin (2 prompts x 3 seeds).
+
+### Run 2: measured levels (prepared 2026-10-20)
+
+**Data design (from the user):** `heavy/` is not a heavier edit. It is the
+original sent through the same edit pipeline with a "keep everything the same"
+prompt, so both members carry the generator's look and centering cancels the
+real-vs-synthetic difference. That is the right control. It also means
+`--add-original` (a real photo as a third member) would reintroduce what the
+pass-through removes, so run 2 doesn't use it. The weight data is effectively
+a "thinner" slider, which fits the handoff's top-level-plus-edits-downward
+design; heavier-than-original is extrapolation.
+
+**Run 2** (`configs/krea2_weight_slider_measured.yaml`): the same as run 1
+except measured levels (`datasets/weight_slider_tuples/measured/`, body width
+of the pass-through and thin members) and `level_norm: median_span`. Same two
+held-out tuples (`split_holdout.py --ids`), so the sweeps compare directly.
+Planner output: kappa = 0.114, 16 tuples kept, `2060bd6e...` dropped
+(span 0.028 < 0.3 kappa), `v3jf2w2lrvih1` leverage-capped (95th percentile;
+strongest edit). Multipliers per tuple run from ±0.16 (weak edits) to ±0.94.
+
+Expectations: the LoRA trains at about half run 1's multipliers for a
+typical tuple, so it must grow ~2x to reproduce an edit at m = 1. The same
+steps / lr may look weaker per unit m; if so, raise steps or lr, since the
+direction is unchanged. Tuple influence grows with s^2, so the 3-4 weak-edit
+tuples (span 0.03-0.04, comparable to the measure's ±0.03 noise) contribute
+little.
