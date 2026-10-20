@@ -1,4 +1,7 @@
-"""Per-image slider scales (F1).
+"""Per-image slider scales (F1), for ordinary (non-tuple) datasets and polarity runs.
+
+Tuple datasets (``slider_tuples``) do not use these: they read measured levels
+from the manifest and compute centered scales themselves (centering.py).
 
 A dataset opts in with ``slider_scales: true``. Each image's LoRA multiplier
 then comes from, in order:
@@ -42,15 +45,15 @@ class SliderDatasetOptions:
             raise ValueError(
                 f"slider_scale_normalize must be one of {NORMALIZE_MODES}, got {options.normalize!r}"
             )
-        if options.normalize != "none" and not (options.scales or options.tuples):
-            raise ValueError("slider_scale_normalize requires slider_scales: true or slider_tuples")
+        if options.normalize != "none" and not options.scales:
+            raise ValueError("slider_scale_normalize requires slider_scales: true")
         is_tuple_guidance = raw.get("guidance_type") == "slider_tuple"
         if options.tuples is not None and not is_tuple_guidance:
             raise ValueError("slider_tuples requires guidance_type: slider_tuple")
         if is_tuple_guidance and options.tuples is None:
             raise ValueError("guidance_type: slider_tuple requires slider_tuples (a tuples.jsonl manifest)")
         if options.tuples is not None and options.scales:
-            raise ValueError("slider_scales does not apply to tuple datasets; scales come from the manifest")
+            raise ValueError("slider_scales does not apply to tuple datasets; they center the manifest's levels")
         return options
 
 

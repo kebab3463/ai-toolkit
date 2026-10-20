@@ -1,4 +1,4 @@
-"""M5 / F3: masked slider loss."""
+"""F3: masked slider loss."""
 
 import json
 import os
@@ -112,7 +112,7 @@ def test_trainer_applies_manifest_masks(tmp_path):
     Image.fromarray(body).save(root / "p01" / "body.png")
 
     def manifest(mask_plus, mask_minus, name):
-        members = [{"image": "p01/plus.png", "scale": 1.0}, {"image": "p01/minus.png", "scale": -1.0}]
+        members = [{"image": "p01/plus.png", "level": 1.0}, {"image": "p01/minus.png", "level": -1.0}]
         for m, mask in zip(members, (mask_plus, mask_minus)):
             if mask:
                 m["mask"] = f"p01/{mask}"

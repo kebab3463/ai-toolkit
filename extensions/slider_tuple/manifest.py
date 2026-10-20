@@ -1,34 +1,44 @@
 """Tuple manifests (F2): ``tuples.jsonl``, one tuple per line.
 
-    {"id": "p01", "caption": "photo of a person ...",
-     "members": [{"image": "p01/m2.png", "scale": -1.8},
-                 {"image": "p01/ref.png", "scale": 0},
-                 {"image": "p01/p1.png", "scale": 1.4, "weight": 1.0, "mask": "p01/p1_mask.png"}]}
+    {"id": "p01", "caption": "photo of a person ...", "quality": 1.0,
+     "original": "p01/original.png",
+     "members": [{"image": "p01/real.png", "level": 3.1, "role": "real"},
+                 {"image": "p01/edit1.png", "level": 2.4, "role": "edit", "quality": 0.8},
+                 {"image": "p01/edit2.png", "level": 1.6, "role": "edit", "level_var": 0.04,
+                  "mask": "p01/edit2_mask.png"}]}
 
-Image and mask paths are relative to the manifest's folder (or absolute).
-Every member of a tuple must have the same pixel size. A tuple needs at least
-two members with a nonzero scale; scale-0 members (the unedited reference)
-are loaded for metrics and debug dumps only and never trained.
+``level`` is the member's measured attribute level; only within-tuple level
+differences matter (training centers them per step, see centering.py).
+``role`` is "real" (the re-textured real photo, normally the highest level) or
+"edit" (default); at most one real member per tuple. Optional ``quality`` in
+[0, 1] and measurement variance ``level_var`` > 0 set member weights; tuple
+``quality`` sets the tuple weight. ``original`` is the untouched real photo,
+used for metrics and debug dumps only. Paths are relative to the manifest's
+folder (or absolute); every member of a tuple must have the same pixel size.
+Pairs are tuples with two members.
 """
 
 import json
 import math
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional
 
 from PIL import Image
 
-TUPLE_KEYS = {"id", "caption", "members"}
-MEMBER_KEYS = {"image", "scale", "weight", "mask"}
+TUPLE_KEYS = {"id", "caption", "members", "quality", "original"}
+MEMBER_KEYS = {"image", "level", "role", "mask", "quality", "level_var"}
+ROLES = ("real", "edit")
 
 
 @dataclass
 class TupleMember:
     image: str
-    scale: float
-    weight: Optional[float] = None
+    level: float
+    role: str = "edit"
     mask: Optional[str] = None
+    quality: Optional[float] = None
+    level_var: Optional[float] = None
 
 
 @dataclass
@@ -36,7 +46,9 @@ class SliderTuple:
     id: str
     caption: str
     members: List[TupleMember]
-    size: tuple = field(default=(0, 0))
+    quality: Optional[float] = None
+    original: Optional[str] = None
+    size: tuple = (0, 0)
 
     @property
     def anchor(self) -> TupleMember:
@@ -44,8 +56,14 @@ class SliderTuple:
         return self.members[0]
 
     @property
-    def trainable(self) -> List[int]:
-        return [i for i, m in enumerate(self.members) if m.scale != 0]
+    def span(self) -> float:
+        levels = [m.level for m in self.members]
+        return max(levels) - min(levels)
+
+    @property
+    def by_level(self) -> List[int]:
+        """Member indices from highest to lowest level; position = rank (0 = top, normally the real photo)."""
+        return sorted(range(len(self.members)), key=lambda i: -self.members[i].level)
 
 
 class ManifestError(ValueError):
@@ -61,14 +79,48 @@ def _number(value, where: str) -> float:
     return value
 
 
+def _quality(value, where: str) -> Optional[float]:
+    if value is None:
+        return None
+    value = _number(value, where)
+    if not 0.0 <= value <= 1.0:
+        raise ManifestError(f"{where}: must be in [0, 1], got {value}")
+    return value
+
+
 def _path(value, base: str, where: str) -> str:
     if not isinstance(value, str) or not value:
         raise ManifestError(f"{where}: expected a path string, got {value!r}")
-    path = value if os.path.isabs(value) else os.path.join(base, value)
-    path = os.path.abspath(path)
+    path = os.path.abspath(value if os.path.isabs(value) else os.path.join(base, value))
     if not os.path.isfile(path):
         raise ManifestError(f"{where}: file not found: {path}")
     return path
+
+
+def _member(m, base: str, where: str) -> TupleMember:
+    if not isinstance(m, dict):
+        raise ManifestError(f"{where}: expected an object")
+    unknown = set(m) - MEMBER_KEYS
+    if unknown:
+        raise ManifestError(f"{where}: unknown keys {sorted(unknown)}")
+    if "image" not in m or "level" not in m:
+        raise ManifestError(f"{where}: needs 'image' and 'level'")
+    role = m.get("role", "edit")
+    if role not in ROLES:
+        raise ManifestError(f"{where}: role must be one of {ROLES}, got {role!r}")
+    level_var = m.get("level_var")
+    if level_var is not None:
+        level_var = _number(level_var, f"{where} level_var")
+        if level_var <= 0:
+            raise ManifestError(f"{where} level_var: must be > 0, got {level_var}")
+    return TupleMember(
+        image=_path(m["image"], base, f"{where} image"),
+        level=_number(m["level"], f"{where} level"),
+        role=role,
+        mask=_path(m["mask"], base, f"{where} mask") if m.get("mask") is not None else None,
+        quality=_quality(m.get("quality"), f"{where} quality"),
+        level_var=level_var,
+    )
 
 
 def parse_tuple(data, base: str, where: str) -> SliderTuple:
@@ -91,32 +143,13 @@ def parse_tuple(data, base: str, where: str) -> SliderTuple:
     if not isinstance(raw_members, list) or len(raw_members) < 2:
         raise ManifestError(f"{where}: 'members' must list at least two members")
 
-    members = []
-    for i, m in enumerate(raw_members):
-        mw = f"{where} member {i}"
-        if not isinstance(m, dict):
-            raise ManifestError(f"{mw}: expected an object")
-        unknown = set(m) - MEMBER_KEYS
-        if unknown:
-            raise ManifestError(f"{mw}: unknown keys {sorted(unknown)}")
-        if "image" not in m or "scale" not in m:
-            raise ManifestError(f"{mw}: needs 'image' and 'scale'")
-        weight = m.get("weight")
-        if weight is not None:
-            weight = _number(weight, f"{mw} weight")
-            if weight < 0:
-                raise ManifestError(f"{mw} weight: must be >= 0, got {weight}")
-        members.append(TupleMember(
-            image=_path(m["image"], base, f"{mw} image"),
-            scale=_number(m["scale"], f"{mw} scale"),
-            weight=weight,
-            mask=_path(m["mask"], base, f"{mw} mask") if m.get("mask") is not None else None,
-        ))
-
+    members = [_member(m, base, f"{where} member {i}") for i, m in enumerate(raw_members)]
     if len({m.image for m in members}) != len(members):
         raise ManifestError(f"{where}: the same image is listed twice")
-    if sum(m.scale != 0 for m in members) < 2:
-        raise ManifestError(f"{where}: needs at least two members with a nonzero scale")
+    if sum(m.role == "real" for m in members) > 1:
+        raise ManifestError(f"{where}: at most one member can have role 'real'")
+    if len({m.level for m in members}) == 1:
+        raise ManifestError(f"{where}: all members have the same level (zero span)")
 
     sizes = {}
     for m in members:
@@ -126,7 +159,14 @@ def parse_tuple(data, base: str, where: str) -> SliderTuple:
         detail = ", ".join(f"{os.path.basename(p)} {w}x{h}" for p, (w, h) in sizes.items())
         raise ManifestError(f"{where}: members must share one pixel size ({detail})")
 
-    return SliderTuple(id=tuple_id, caption=caption.strip(), members=members, size=next(iter(sizes.values())))
+    return SliderTuple(
+        id=tuple_id,
+        caption=caption.strip(),
+        members=members,
+        quality=_quality(data.get("quality"), f"{where} quality"),
+        original=_path(data["original"], base, f"{where} original") if data.get("original") is not None else None,
+        size=next(iter(sizes.values())),
+    )
 
 
 def load_manifest(path: str) -> List[SliderTuple]:

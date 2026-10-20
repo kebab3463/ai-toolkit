@@ -4,7 +4,7 @@ import pytest
 import torch
 
 from extensions.slider_tuple.loss import slider_tuple_loss
-from extensions.slider_tuple.sampling import member_weights, weighted_scale_sum
+from extensions.slider_tuple.centering import centered_scales, weighted_scale_sum
 from toolkit.guidance import get_guided_loss_polarity
 
 from .stubs import StubModel, make_batch, make_embeds, make_pair, make_train_config
@@ -83,25 +83,50 @@ def test_loss_is_weighted_sum_of_member_mses():
     assert loss.item() == pytest.approx(expected, rel=1e-6)
 
 
-def identical_tuple_grad(scales, zero_sum):
-    gen = torch.Generator().manual_seed(7)
-    image = torch.randn(1, 4, 8, 8, generator=gen)
+def tuple_grad(images, levels, weights, kappa=1.0, offset=0.0, seed=7, zero_lora=True):
+    """LoRA gradient of one tuple with centered multipliers (+ optional offset)."""
+    gen = torch.Generator().manual_seed(seed)
     noise = torch.randn(1, 4, 8, 8, generator=gen)
-    weights = member_weights(scales, [None] * len(scales), zero_sum=zero_sum)
+    scales = centered_scales(levels, weights, kappa, offset)
     sd = StubModel()
-    with torch.no_grad():
-        sd.lora.weight.zero_()  # a fresh LoRA contributes nothing (its up-projection starts at zero)
-    run_slider(sd, [image.clone() for _ in scales], [[s] for s in scales], [[w] for w in weights],
+    if zero_lora:
+        with torch.no_grad():
+            sd.lora.weight.zero_()  # a fresh LoRA contributes nothing (its up-projection starts at zero)
+    run_slider(sd, [x.clone() for x in images], [[s] for s in scales], [[w] for w in weights],
                noise, torch.tensor([400.0]), make_embeds(1))
-    return sd.lora.weight.grad, weighted_scale_sum(scales, weights)
+    return sd.lora.weight.grad, scales
 
 
-@pytest.mark.parametrize("scales", [(1.4, -0.6), (2.0, 0.5, -1.0)])
-def test_identical_members_give_zero_lora_gradient_with_zero_sum_weights(scales):
-    grad, wsum = identical_tuple_grad(scales, zero_sum=True)
-    assert wsum == pytest.approx(0.0, abs=1e-12)
+def same_image(n, seed=11):
+    image = torch.randn(1, 4, 8, 8, generator=torch.Generator().manual_seed(seed))
+    return [image] * n
+
+
+# acceptance (2): identical images -> zero LoRA gradient for any weights
+@pytest.mark.parametrize(
+    "levels, weights",
+    [([1.0, -1.0], [1.0, 1.0]), ([1.4, 0.9, -0.2], [1.0, 0.5, 1.0]), ([3.1, 2.4, 1.6, 0.2], [0.3, 2.0, 1.0, 0.7])],
+)
+def test_identical_members_give_zero_lora_gradient_for_any_weights(levels, weights):
+    grad, scales = tuple_grad(same_image(len(levels)), levels, weights, kappa=0.9)
+    assert weighted_scale_sum(scales, weights) == pytest.approx(0.0, abs=1e-12)
     assert grad.abs().max().item() < 1e-6
-    # control: unit weights on the same asymmetric tuple do push the LoRA
-    grad_unit, wsum_unit = identical_tuple_grad(scales, zero_sum=False)
-    assert abs(wsum_unit) > 0.1
-    assert grad_unit.abs().max().item() > 1e-2
+
+
+# acceptance (4): with an offset the shared content leaks into the gradient, and for a pair
+# offset by delta / 2 kappa the lower member sits at multiplier 0 and contributes nothing
+def test_center_offset_breaks_cancellation():
+    grad, _ = tuple_grad(same_image(3), [1.4, 0.9, -0.2], [1.0, 0.5, 1.0], offset=0.3)
+    assert grad.abs().max().item() > 1e-2
+
+
+def test_offset_half_span_zeroes_the_lower_members_gradient():
+    gen = torch.Generator().manual_seed(4)
+    upper, lower = torch.randn(1, 4, 8, 8, generator=gen), torch.randn(1, 4, 8, 8, generator=gen)
+    levels, kappa = [2.5, 1.0], 1.5
+    offset = (levels[0] - levels[1]) / (2 * kappa)
+    grad_pair, scales = tuple_grad([upper, lower], levels, [1.0, 1.0], kappa=kappa, offset=offset, zero_lora=False)
+    assert scales == pytest.approx([1.0, 0.0])
+    grad_upper_only, _ = tuple_grad([upper], [levels[0]], [1.0], kappa=kappa, offset=1.0, zero_lora=False)
+    assert torch.allclose(grad_pair, grad_upper_only, rtol=1e-5, atol=1e-7)
+    assert grad_pair.abs().max() > 1e-3
