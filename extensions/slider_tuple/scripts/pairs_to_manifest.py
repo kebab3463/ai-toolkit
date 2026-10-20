@@ -2,7 +2,9 @@
 
 Each image in the positive folder with a same-stem partner in the negative
 folder becomes a two-member tuple: the positive image first (the anchor) at
-+scale, the partner at -scale, captioned from the positive image's caption file.
+level +scale, the partner at level -scale, captioned from the positive image's
+caption file. With ``slider.level_norm: none`` the centered multipliers are
++-scale, i.e. polarity at ``network_weight: scale``.
 Tuples are written in the order upstream's dataset scan visits the positive
 folder (os.walk), so a slider_tuple run iterates the pairs like the polarity run.
 
@@ -58,8 +60,8 @@ def main():
                 "id": stem,
                 "caption": caption,
                 "members": [
-                    {"image": os.path.relpath(os.path.abspath(positive), out_dir), "scale": args.scale},
-                    {"image": os.path.relpath(os.path.abspath(negative), out_dir), "scale": -args.scale},
+                    {"image": os.path.relpath(os.path.abspath(positive), out_dir), "level": args.scale},
+                    {"image": os.path.relpath(os.path.abspath(negative), out_dir), "level": -args.scale},
                 ],
             }))
     with open(args.out, "w", encoding="utf-8") as f:

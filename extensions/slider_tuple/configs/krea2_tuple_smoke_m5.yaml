@@ -36,7 +36,8 @@ config:
           cache_latents_to_disk: true
           resolution: [1024]
       slider:
-        members_per_step: 2
+        # levels +-1 centered with kappa 1 -> multipliers +-1, like polarity at weight 1
+        level_norm: none
         debug_dump_steps: 1 # writes <run>/slider_debug/step000000_<id>.png
         anchor_strength: 1.0
         anchor_prob: 1.0
