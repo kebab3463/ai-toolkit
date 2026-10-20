@@ -134,7 +134,7 @@ def test_absolute_paths_accepted(tmp_path):
 def test_tuples_to_pairs_keeps_the_extremes(tmp_path):
     import importlib.util
     spec = importlib.util.spec_from_file_location(
-        "tuples_to_pairs", os.path.join(os.path.dirname(__file__), "..", "scripts", "tuples_to_pairs.py"))
+        "tuples_to_pairs", os.path.join(os.path.dirname(__file__), "..", "scripts", "dev", "tuples_to_pairs.py"))
     script = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(script)
 

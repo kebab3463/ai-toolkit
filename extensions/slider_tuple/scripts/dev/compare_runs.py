@@ -9,14 +9,14 @@ Used for M2 (sd_trainer vs slider_tuple_trainer on the same polarity data) and
 reusable for later equivalence checks (e.g. polarity vs slider_tuple in M4).
 
 Usage (from the repo root):
-    .venv/bin/python extensions/slider_tuple/scripts/compare_runs.py \\
-        extensions/slider_tuple/configs/krea2_polarity_smoke.yaml \\
-        extensions/slider_tuple/configs/krea2_polarity_smoke_ext.yaml
+    .venv/bin/python extensions/slider_tuple/scripts/dev/compare_runs.py \\
+        extensions/slider_tuple/configs/dev/krea2_polarity_smoke.yaml \\
+        extensions/slider_tuple/configs/dev/krea2_polarity_smoke_ext.yaml
 
 Same config with one setting changed (an A/B):
-    .venv/bin/python extensions/slider_tuple/scripts/compare_runs.py \\
-        extensions/slider_tuple/configs/krea2_polarity_smoke.yaml \\
-        extensions/slider_tuple/configs/krea2_polarity_smoke.yaml \\
+    .venv/bin/python extensions/slider_tuple/scripts/dev/compare_runs.py \\
+        extensions/slider_tuple/configs/dev/krea2_polarity_smoke.yaml \\
+        extensions/slider_tuple/configs/dev/krea2_polarity_smoke.yaml \\
         --set-b model.qtype=convrot8 --suffix-b _convrot8
 
 Run folders are output/<config name><suffix>; pass --overwrite to replace them.
@@ -36,7 +36,7 @@ import time
 
 import yaml
 
-REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 sys.path.insert(0, REPO_ROOT)
 
 NVIDIA_SMI_CANDIDATES = ["/usr/lib/wsl/lib/nvidia-smi", "nvidia-smi"]

@@ -130,14 +130,14 @@ fine-tune of Krea 2 Raw; `/models` is gitignored) instead of `krea/Krea-2-Raw`.
 - **Training quantization.** int8_convrot == `qtype: convrot8`, which trains
   with a real int8 tensor-core forward (bit-identical to inference) and a
   straight-through backward. Candidate replacement for `qfloat8` on the DiT,
-  pending a 20-step speed/VRAM A/B with `scripts/compare_runs.py`.
+  pending a 20-step speed/VRAM A/B with `scripts/dev/compare_runs.py`.
 
 ## Milestone results
 
 ### M1: baseline polarity smoke test (2026-10-16, RTX 5090 32 GB)
 
-Config `configs/krea2_polarity_smoke.yaml`, 5 synthetic pairs from
-`scripts/make_smoke_pairs.py`, LoRA rank 16, 200 steps at 1024 px.
+Config `configs/dev/krea2_polarity_smoke.yaml`, 5 synthetic pairs from
+`scripts/dev/make_smoke_pairs.py`, LoRA rank 16, 200 steps at 1024 px.
 
 | Run | Result |
 | --- | --- |
@@ -158,7 +158,7 @@ Consequences: fp8 quantization is mandatory for Krea 2 slider training on
 
 ### M2: slider_tuple trainer reproduces sd_trainer (2026-10-16)
 
-`scripts/compare_runs.py` on the two smoke configs (BigLove Krea Life 2 Raw,
+`scripts/dev/compare_runs.py` on the two smoke configs (BigLove Krea Life 2 Raw,
 fp8 qfloat8 DiT + TE, 1024 px, `SEED=42`, 20 steps, sampling off).
 
 | | `sd_trainer` | `slider_tuple_trainer` |
@@ -443,7 +443,7 @@ slope 0, LPIPS 0, face similarity 1" (the F6 acceptance criterion), and the
 script's measure/summary path end to end on pre-rendered images. GPU
 acceptance run (`--zero-lora`): pending.
 
-`scripts/tuples_to_pairs.py` prepares the M5 tuples-vs-pairs comparison
+`scripts/dev/tuples_to_pairs.py` prepares the M5 tuples-vs-pairs comparison
 (each tuple reduced to its highest and lowest member, everything else equal).
 
 ### Paste-back of head and background (2026-10-20)
@@ -496,7 +496,7 @@ follows each prompt's `--m`; steps / CFG / mu come from `turbo_preview_steps`
   BigLove Turbo file loads on CPU in 7.3 s, memory-mapped (~1.2 GB RSS).
   `slider_sweep.py --model <that file>` uses the same loader.
 
-GPU acceptance (pending): `configs/krea2_turbo_preview_f7.yaml` samples at
+GPU acceptance (pending): `configs/dev/krea2_turbo_preview_f7.yaml` samples at
 step 0, where the LoRA is still zero, so the three `--m` previews must match
 a plain Turbo render of the same prompt and seed
 (`scripts/image_lpips.py`); also check peak memory with Raw offloaded.

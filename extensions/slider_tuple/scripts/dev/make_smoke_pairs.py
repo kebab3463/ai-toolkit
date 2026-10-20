@@ -5,21 +5,21 @@ between the two images, so composition stays roughly similar. This is enough to
 check that paired training runs end to end; it is NOT training data (identity and
 framing are not held fixed the way real tuples must be).
 
-Output layout matches extensions/slider_tuple/configs/krea2_polarity_smoke.yaml:
+Output layout matches extensions/slider_tuple/configs/dev/krea2_polarity_smoke.yaml:
 
     <out>/after/pair_NN.png + pair_NN.txt   (positive attribute, shared caption)
     <out>/before/pair_NN.png                (negative attribute)
 
 Usage (from the repo root):
-    .venv/bin/python extensions/slider_tuple/scripts/make_smoke_pairs.py
-    .venv/bin/python extensions/slider_tuple/scripts/make_smoke_pairs.py --model krea/Krea-2-Turbo --steps 9 --cfg 1
+    .venv/bin/python extensions/slider_tuple/scripts/dev/make_smoke_pairs.py
+    .venv/bin/python extensions/slider_tuple/scripts/dev/make_smoke_pairs.py --model krea/Krea-2-Turbo --steps 9 --cfg 1
 """
 
 import argparse
 import os
 import sys
 
-REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 sys.path.insert(0, REPO_ROOT)
 
 from dotenv import load_dotenv  # noqa: E402

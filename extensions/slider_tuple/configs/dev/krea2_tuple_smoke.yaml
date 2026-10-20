@@ -1,14 +1,22 @@
-# F7 acceptance: training previews on the BigLove Turbo int8_convrot file while
-# training on Raw. The step-0 samples use a zero-initialized LoRA, so all three
-# --m images must match a plain Turbo render of the same prompt and seed
-# (slider_sweep.py --model <turbo file>, no --lora; see NOTES.md, F7).
+# M4 smoke test: the same 5 synthetic pairs as krea2_polarity_smoke.yaml, as
+# two-member tuples (levels +1 / -1) trained with guidance_type: slider_tuple.
+# Everything else matches the polarity config, so the two runs are comparable.
+#
+# Manifest (from the polarity folders, in their scan order):
+#   .venv/bin/python extensions/slider_tuple/scripts/pairs_to_manifest.py \
+#       datasets/slider_smoke/after datasets/slider_smoke/before datasets/slider_smoke/tuples.jsonl
+#
+# Per-step losses cannot match polarity exactly on the GPU: the Qwen-Image VAE
+# samples its latent, and polarity re-encodes its partner every step (consuming
+# the RNG before noise/timesteps are drawn) while slider_tuple caches member
+# latents. Exact equivalence on fixed inputs is covered by the CPU tests.
 #
 # Run (from the repo root):
-#   SEED=42 .venv/bin/python run.py extensions/slider_tuple/configs/krea2_turbo_preview_f7.yaml
+#   SEED=42 .venv/bin/python run.py extensions/slider_tuple/configs/dev/krea2_tuple_smoke.yaml
 ---
 job: extension
 config:
-  name: "krea2_turbo_preview_f7"
+  name: "krea2_tuple_smoke"
   process:
     - type: "slider_tuple_trainer"
       training_folder: "output"
@@ -27,7 +35,7 @@ config:
         save_every: 200
         max_step_saves_to_keep: 2
       datasets:
-        - slider_tuples: "datasets/slider_smoke/tuples_masked.jsonl"
+        - slider_tuples: "datasets/slider_smoke/tuples.jsonl"
           guidance_type: "slider_tuple"
           caption_dropout_rate: 0.0
           cache_latents_to_disk: true
@@ -35,13 +43,10 @@ config:
       slider:
         # levels +-1 centered with kappa 1 -> multipliers +-1, like polarity at weight 1
         level_norm: none
-        # previews render on Turbo (8 steps, CFG off, mu 1.15) with the trainee
-        # LoRA as hooks; the Raw DiT waits on the CPU meanwhile
-        turbo_preview: "/home/csprunger/.nvme_cache/diffusion_models/Krea2/BigLoveKreaLife2_int8.safetensors"
-        turbo_preview_offload: true
+        debug_dump_steps: 1 # writes <run>/slider_debug/step000000_<id>.png
       train:
         batch_size: 1
-        steps: 20
+        steps: 200
         gradient_accumulation: 1
         train_unet: true
         train_text_encoder: false
@@ -73,8 +78,7 @@ config:
         low_vram: false
       sample:
         sampler: "flowmatch"
-        sample_every: 20
-        format: "png" # lossless, for the LPIPS comparison with the plain Turbo render
+        sample_every: 100
         width: 1024
         height: 1024
         # same prompt and seed at three LoRA strengths; walk_seed off so the
@@ -86,7 +90,6 @@ config:
         neg: ""
         seed: 42
         walk_seed: false
-        # overridden by turbo_preview_cfg / turbo_preview_steps on the Turbo path
         guidance_scale: 4
         sample_steps: 25
 meta:

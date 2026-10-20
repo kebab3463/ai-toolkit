@@ -3,11 +3,11 @@
 # top quarter of the frame), not real body/head/background masks.
 #
 # Masked manifest:
-#   .venv/bin/python extensions/slider_tuple/scripts/make_band_masks.py \
+#   .venv/bin/python extensions/slider_tuple/scripts/dev/make_band_masks.py \
 #       datasets/slider_smoke/tuples.jsonl datasets/slider_smoke/tuples_masked.jsonl
 #
 # Run (from the repo root):
-#   SEED=42 .venv/bin/python run.py extensions/slider_tuple/configs/krea2_tuple_smoke_m5.yaml
+#   SEED=42 .venv/bin/python run.py extensions/slider_tuple/configs/dev/krea2_tuple_smoke_m5.yaml
 ---
 job: extension
 config:

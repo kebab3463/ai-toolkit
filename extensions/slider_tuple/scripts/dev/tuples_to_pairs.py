@@ -6,7 +6,7 @@ and a tuples run differ only in the intermediate levels. Paths are rewritten
 relative to the output manifest.
 
 Usage (from the repo root):
-    .venv/bin/python extensions/slider_tuple/scripts/tuples_to_pairs.py data/tuples.jsonl data/pairs.jsonl
+    .venv/bin/python extensions/slider_tuple/scripts/dev/tuples_to_pairs.py data/tuples.jsonl data/pairs.jsonl
 """
 
 import argparse
@@ -14,7 +14,7 @@ import json
 import os
 import sys
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..")))
 
 from extensions.slider_tuple.manifest import rebase_entry  # noqa: E402
 

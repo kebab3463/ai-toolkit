@@ -6,7 +6,7 @@ exercises the masked-loss path only; real training needs real body / head /
 background masks (see NOTES.md, M5).
 
 Usage (from the repo root):
-    .venv/bin/python extensions/slider_tuple/scripts/make_band_masks.py \\
+    .venv/bin/python extensions/slider_tuple/scripts/dev/make_band_masks.py \\
         datasets/slider_smoke/tuples.jsonl datasets/slider_smoke/tuples_masked.jsonl
 """
 

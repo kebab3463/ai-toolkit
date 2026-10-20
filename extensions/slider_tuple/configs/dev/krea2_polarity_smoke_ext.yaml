@@ -1,24 +1,16 @@
-# M1 baseline smoke test: upstream image-pair slider (guidance_type: polarity)
-# on Krea 2 Raw, using the stock sd_trainer. No slider_tuple code involved.
-#
-# Data layout (4-6 synthetic pairs, identical stems in both folders), as written by
-# extensions/slider_tuple/scripts/make_smoke_pairs.py:
-#   datasets/slider_smoke/after/   pair_01.png  pair_01.txt  ...   LoRA at +network_weight
-#   datasets/slider_smoke/before/  pair_01.png               ...   LoRA at -network_weight
-# Both members of a pair share the caption in after/<stem>.txt and must have
-# the same size and framing; before/ images are cropped exactly like after/.
+# M2 acceptance run: identical to krea2_polarity_smoke.yaml (M1) except the
+# trainer type and run name. Its loss curve must reproduce M1's on the same
+# data and seed; any difference means the slider_tuple trainer changed the
+# polarity path.
 #
 # Run (from the repo root):
-#   SEED=42 .venv/bin/python run.py extensions/slider_tuple/configs/krea2_polarity_smoke.yaml
-# Watch VRAM in a second terminal:
-#   /usr/lib/wsl/lib/nvidia-smi --query-gpu=memory.used --format=csv -l 1
-# Report peak VRAM and s/step (printed every performance_log_every steps).
+#   SEED=42 .venv/bin/python run.py extensions/slider_tuple/configs/dev/krea2_polarity_smoke_ext.yaml
 ---
 job: extension
 config:
-  name: "krea2_polarity_smoke"
+  name: "krea2_polarity_smoke_ext"
   process:
-    - type: "sd_trainer"
+    - type: "slider_tuple_trainer"
       training_folder: "output"
       device: cuda:0
       performance_log_every: 10

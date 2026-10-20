@@ -1,14 +1,14 @@
-# M2 acceptance run: identical to krea2_polarity_smoke.yaml (M1) except the
-# trainer type and run name. Its loss curve must reproduce M1's on the same
-# data and seed; any difference means the slider_tuple trainer changed the
-# polarity path.
+# F7 acceptance: training previews on the BigLove Turbo int8_convrot file while
+# training on Raw. The step-0 samples use a zero-initialized LoRA, so all three
+# --m images must match a plain Turbo render of the same prompt and seed
+# (slider_sweep.py --model <turbo file>, no --lora; see NOTES.md, F7).
 #
 # Run (from the repo root):
-#   SEED=42 .venv/bin/python run.py extensions/slider_tuple/configs/krea2_polarity_smoke_ext.yaml
+#   SEED=42 .venv/bin/python run.py extensions/slider_tuple/configs/dev/krea2_turbo_preview_f7.yaml
 ---
 job: extension
 config:
-  name: "krea2_polarity_smoke_ext"
+  name: "krea2_turbo_preview_f7"
   process:
     - type: "slider_tuple_trainer"
       training_folder: "output"
@@ -27,17 +27,21 @@ config:
         save_every: 200
         max_step_saves_to_keep: 2
       datasets:
-        - folder_path: "datasets/slider_smoke/after"
-          unconditional_path: "datasets/slider_smoke/before"
-          guidance_type: "polarity"
-          network_weight: 1.0
-          caption_ext: "txt"
+        - slider_tuples: "datasets/slider_smoke/tuples_masked.jsonl"
+          guidance_type: "slider_tuple"
           caption_dropout_rate: 0.0
           cache_latents_to_disk: true
           resolution: [1024]
+      slider:
+        # levels +-1 centered with kappa 1 -> multipliers +-1, like polarity at weight 1
+        level_norm: none
+        # previews render on Turbo (8 steps, CFG off, mu 1.15) with the trainee
+        # LoRA as hooks; the Raw DiT waits on the CPU meanwhile
+        turbo_preview: "/home/csprunger/.nvme_cache/diffusion_models/Krea2/BigLoveKreaLife2_int8.safetensors"
+        turbo_preview_offload: true
       train:
         batch_size: 1
-        steps: 200
+        steps: 20
         gradient_accumulation: 1
         train_unet: true
         train_text_encoder: false
@@ -69,7 +73,8 @@ config:
         low_vram: false
       sample:
         sampler: "flowmatch"
-        sample_every: 100
+        sample_every: 20
+        format: "png" # lossless, for the LPIPS comparison with the plain Turbo render
         width: 1024
         height: 1024
         # same prompt and seed at three LoRA strengths; walk_seed off so the
@@ -81,6 +86,7 @@ config:
         neg: ""
         seed: 42
         walk_seed: false
+        # overridden by turbo_preview_cfg / turbo_preview_steps on the Turbo path
         guidance_scale: 4
         sample_steps: 25
 meta:
