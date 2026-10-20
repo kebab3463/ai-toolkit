@@ -29,7 +29,9 @@ import numpy as np  # noqa: E402
 from PIL import Image  # noqa: E402
 
 from extensions.slider_tuple.manifest import load_manifest, rebase_entry  # noqa: E402
-from extensions.slider_tuple.tuple_masks import compose, head_ellipse, overlay, to_png_array, union  # noqa: E402
+from extensions.slider_tuple.tuple_masks import (  # noqa: E402
+    compose, head_ellipse, load_mask_models, overlay, to_png_array, union,
+)
 
 
 def parse_args(argv=None):
@@ -111,39 +113,11 @@ def run(args, matte_fn, keypoints_fn):
     return missing
 
 
-def load_models(device):
-    import torch
-    import torchvision
-    from torchvision.transforms.functional import to_tensor
-
-    from toolkit.models.sapiens2 import Sapiens2Matting
-
-    matting = Sapiens2Matting.from_pretrained(device=device, dtype=torch.float16)
-    weights = torchvision.models.detection.KeypointRCNN_ResNet50_FPN_Weights.DEFAULT
-    detector = torchvision.models.detection.keypointrcnn_resnet50_fpn(weights=weights).to(device).eval()
-
-    @torch.no_grad()
-    def matte_fn(img):
-        return np.asarray(matting(img).convert("L"), dtype=np.float32) / 255.0
-
-    @torch.no_grad()
-    def keypoints_fn(img):
-        out = detector([to_tensor(img).to(device)])[0]
-        if len(out["scores"]) == 0:
-            return None
-        best = int(out["scores"].argmax())  # the tuple's one person: the most confident detection
-        kps = out["keypoints"][best, :, :2].cpu().numpy()
-        scores = out["keypoints_scores"][best].cpu().numpy()
-        return np.concatenate([kps, scores[:, None]], axis=1)
-
-    return matte_fn, keypoints_fn
-
-
 def main():
     args = parse_args()
     if args.head_masks and not os.path.isdir(args.head_masks):
         raise SystemExit(f"--head-masks: not a folder: {args.head_masks}")
-    matte_fn, keypoints_fn = load_models(args.device)
+    matte_fn, keypoints_fn = load_mask_models(args.device)
     run(args, matte_fn, keypoints_fn)
 
 

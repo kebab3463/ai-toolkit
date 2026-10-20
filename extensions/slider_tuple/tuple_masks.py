@@ -73,3 +73,37 @@ def overlay(image: np.ndarray, mask: np.ndarray) -> np.ndarray:
     head = mask <= 0.0
     shown[head] = 0.5 * shown[head] + 0.5 * np.array([255.0, 0.0, 0.0])
     return np.clip(shown, 0, 255).astype(np.uint8)
+
+
+def load_mask_models(device: str = "cuda:0"):
+    """(matte_fn, keypoints_fn) for PIL RGB images.
+
+    matte_fn: Sapiens2 person matte, H x W float in [0, 1]
+    (facebook/sapiens2-matting-1b, downloaded into models/sapiens2 on first use).
+    keypoints_fn: the most confident person's 17 COCO keypoints as (x, y, score)
+    rows, or None (torchvision Keypoint R-CNN, weights downloaded on first use)."""
+    import torch
+    import torchvision
+    from torchvision.transforms.functional import to_tensor
+
+    from toolkit.models.sapiens2 import Sapiens2Matting
+
+    matting = Sapiens2Matting.from_pretrained(device=device, dtype=torch.float16)
+    weights = torchvision.models.detection.KeypointRCNN_ResNet50_FPN_Weights.DEFAULT
+    detector = torchvision.models.detection.keypointrcnn_resnet50_fpn(weights=weights).to(device).eval()
+
+    @torch.no_grad()
+    def matte_fn(img):
+        return np.asarray(matting(img).convert("L"), dtype=np.float32) / 255.0
+
+    @torch.no_grad()
+    def keypoints_fn(img):
+        out = detector([to_tensor(img).to(device)])[0]
+        if len(out["scores"]) == 0:
+            return None
+        best = int(out["scores"].argmax())  # the tuple's one person: the most confident detection
+        kps = out["keypoints"][best, :, :2].cpu().numpy()
+        scores = out["keypoints_scores"][best].cpu().numpy()
+        return np.concatenate([kps, scores[:, None]], axis=1)
+
+    return matte_fn, keypoints_fn
