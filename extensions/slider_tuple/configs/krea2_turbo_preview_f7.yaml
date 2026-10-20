@@ -1,0 +1,94 @@
+# F7 acceptance: training previews on the BigLove Turbo int8_convrot file while
+# training on Raw. The step-0 samples use a zero-initialized LoRA, so all three
+# --m images must match a plain Turbo render of the same prompt and seed
+# (slider_sweep.py --model <turbo file>, no --lora; see NOTES.md, F7).
+#
+# Run (from the repo root):
+#   SEED=42 .venv/bin/python run.py extensions/slider_tuple/configs/krea2_turbo_preview_f7.yaml
+---
+job: extension
+config:
+  name: "krea2_turbo_preview_f7"
+  process:
+    - type: "slider_tuple_trainer"
+      training_folder: "output"
+      device: cuda:0
+      performance_log_every: 10
+      # per-step loss to <run folder>/loss_log.db, for comparing M1 and M2
+      logging:
+        log_every: 1
+        use_ui_logger: true
+      network:
+        type: "lora"
+        linear: 16
+        linear_alpha: 16
+      save:
+        dtype: float16
+        save_every: 200
+        max_step_saves_to_keep: 2
+      datasets:
+        - slider_tuples: "datasets/slider_smoke/tuples_masked.jsonl"
+          guidance_type: "slider_tuple"
+          caption_dropout_rate: 0.0
+          cache_latents_to_disk: true
+          resolution: [1024]
+      slider:
+        # levels +-1 centered with kappa 1 -> multipliers +-1, like polarity at weight 1
+        level_norm: none
+        # previews render on Turbo (8 steps, CFG off, mu 1.15) with the trainee
+        # LoRA as hooks; the Raw DiT waits on the CPU meanwhile
+        turbo_preview: "/home/csprunger/.nvme_cache/diffusion_models/Krea2/BigLoveKreaLife2_int8.safetensors"
+        turbo_preview_offload: true
+      train:
+        batch_size: 1
+        steps: 20
+        gradient_accumulation: 1
+        train_unet: true
+        train_text_encoder: false
+        cache_text_embeddings: true
+        gradient_checkpointing: true
+        noise_scheduler: "flowmatch"
+        timestep_type: "linear" # UI default for Krea 2
+        optimizer: "adamw8bit"
+        lr: 1e-4
+        dtype: bf16
+      model:
+        # BigLove Krea Life 2 (fine-tune of Krea 2 Raw): a folder holding one
+        # bf16 DiT checkpoint in the same format as krea/Krea-2-Raw (identical
+        # keys and shapes). The text encoder and VAE still load from their
+        # default repos. Use "krea/Krea-2-Raw" for the official base model.
+        name_or_path: "models/BigLoveKreaLife2_raw_AI-Toolkit"
+        arch: "krea2"
+        # also sets the VAE dtype; the float16 default breaks Krea 2 sample
+        # decoding (bf16 latents into an fp16 VAE), see NOTES.md
+        dtype: bf16
+        # 8-bit is required on a 32 GB card: with quantize: false the bf16 DiT
+        # saturates VRAM, and low_vram: true makes steps take >5 min (M1).
+        # convrot8 (= ComfyUI int8_convrot) beat qfloat8 on the DiT: 18% faster,
+        # 3.5 GiB less memory, half the layer error (NOTES.md).
+        quantize: true
+        qtype: "convrot8"
+        quantize_te: true
+        qtype_te: "qfloat8"
+        low_vram: false
+      sample:
+        sampler: "flowmatch"
+        sample_every: 20
+        format: "png" # lossless, for the LPIPS comparison with the plain Turbo render
+        width: 1024
+        height: 1024
+        # same prompt and seed at three LoRA strengths; walk_seed off so the
+        # three images differ only by multiplier
+        prompts:
+          - "photo of a person standing in a park, full body --m -1"
+          - "photo of a person standing in a park, full body --m 0"
+          - "photo of a person standing in a park, full body --m 1"
+        neg: ""
+        seed: 42
+        walk_seed: false
+        # overridden by turbo_preview_cfg / turbo_preview_steps on the Turbo path
+        guidance_scale: 4
+        sample_steps: 25
+meta:
+  name: "[name]"
+  version: "1.0"

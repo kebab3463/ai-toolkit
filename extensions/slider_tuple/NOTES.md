@@ -427,10 +427,12 @@ Summary: slope, R^2, Spearman, fitted intercept vs the m = 0 value, worst
 side effects; the negative diagnostic is reported separately with flags when a
 side effect at -1 is worse than at +1 by `--margin`.
 
-- **Face embedding is pluggable, no built-in yet:** none of insightface /
-  facenet-pytorch / mediapipe is installed, and each adds a dependency with
-  trade-offs (insightface models are non-commercial; facenet-pytorch pins an
-  old torch). Decision pending with the user.
+- **Identity drift = face LPIPS on head crops, not a face embedding.** The
+  sweep only compares each image with its own m = 0 render, so a perceptual
+  distance on the head region (square crop around the union of both
+  Keypoint R-CNN head ellipses, 256 px) answers "did the face change" without
+  a new dependency (insightface models are non-commercial; facenet-pytorch
+  pins an old torch). `--face module:function` stays for an embedding later.
 - **"Value at m = 0 vs base":** with hook-attached LoRAs, m = 0 is the base
   model exactly, so the summary compares the linear fit's intercept with the
   measured m = 0 value (`intercept_minus_m0`), i.e. how linear the response
@@ -475,3 +477,26 @@ background that a thinner member shows, only the editor's reconstruction
 exists (visible as a narrow strip in heavy - thin differences, e.g.
 `v3jf2w2lrvih1`). Captions are a placeholder until the user's captions
 arrive (`--captions <dir>` re-run rewrites only the manifest).
+
+### F7: Turbo preview sampling while training on Raw (2026-10-20)
+
+`turbo.py` + `slider: turbo_preview: <file>`. At each sample event the trainee
+LoRA is saved, the Raw DiT moved to the CPU (`turbo_preview_offload`), the
+Turbo DiT swapped in as `sd.model`, the training network detached from
+sampling, and the saved LoRA attached as `InferenceLoRA` hooks whose strength
+follows each prompt's `--m`; steps / CFG / mu come from `turbo_preview_steps`
+(8) / `_cfg` (1) / `_mu` (1.15). Everything is restored in `finally`.
+
+- **Full weight swap, not a Raw->Turbo delta:** the deployed Turbo is a
+  ComfyUI int8_convrot file, and a delta from an 8-bit file would mix
+  quantization error into a small weight difference.
+- **ComfyUI int8_convrot loads as is:** `load_krea2_dit` strips the
+  `model.diffusion_model.` prefix and the layers stay pre-quantized
+  (`OstrisLinear` with `cr8_qdata` / `cr8_scales`; 224 modules). The
+  BigLove Turbo file loads on CPU in 7.3 s, memory-mapped (~1.2 GB RSS).
+  `slider_sweep.py --model <that file>` uses the same loader.
+
+GPU acceptance (pending): `configs/krea2_turbo_preview_f7.yaml` samples at
+step 0, where the LoRA is still zero, so the three `--m` previews must match
+a plain Turbo render of the same prompt and seed
+(`scripts/image_lpips.py`); also check peak memory with Raw offloaded.
