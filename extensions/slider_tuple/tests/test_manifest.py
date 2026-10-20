@@ -129,3 +129,25 @@ def test_absolute_paths_accepted(tmp_path):
     other = tmp_path / "elsewhere"
     other.mkdir()
     assert load_manifest(write(other, t))[0].members[0].image == t["members"][0]["image"]
+
+
+def test_tuples_to_pairs_keeps_the_extremes(tmp_path):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "tuples_to_pairs", os.path.join(os.path.dirname(__file__), "..", "scripts", "tuples_to_pairs.py"))
+    script = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(script)
+
+    t = basic(tmp_path, levels=(2.0, 3.0, 1.0))  # real photo is not the highest here, on purpose
+    t["members"][2]["mask"] = img(tmp_path, "p01/mask.png")
+    t["original"] = img(tmp_path, "p01/original.png")
+    t["quality"] = 0.7
+    out_dir = tmp_path / "pairs"
+    out_dir.mkdir()
+    pair = script.to_pair(t, str(tmp_path), str(out_dir))
+    with open(out_dir / "pairs.jsonl", "w") as f:
+        f.write(json.dumps(pair) + "\n")
+    parsed = load_manifest(str(out_dir / "pairs.jsonl"))[0]
+    assert [m.level for m in parsed.members] == [3.0, 1.0]
+    assert parsed.members[1].mask.endswith("mask.png") and parsed.original.endswith("original.png")
+    assert parsed.quality == 0.7 and parsed.caption == "photo of a person"
