@@ -127,3 +127,15 @@ def test_face_lpips_in_summary_and_flags():
     assert s.positive["worst_face_lpips"] == pytest.approx(0.02)
     assert s.diagnostic["face_lpips_at_-1"] == pytest.approx(0.3)
     assert any("face LPIPS at m=-1" in f for f in s.flags)
+
+
+def test_per_multiplier_paired_deltas_and_sign():
+    # seed 2 starts higher; the paired delta removes that, the sign check sees the direction
+    rows = rows_for(lambda m, seed: 0.1 * m + seed + (0.5 if m == -1 else 0.0), lpips_fn=lambda m: abs(m) / 10)
+    table = {r["m"]: r for r in summarize(rows).per_m}
+    assert table[1.0]["delta"] == pytest.approx(0.1) and table[1.0]["delta_sd"] == pytest.approx(0.0)
+    assert table[1.0]["right_sign"] == 1.0 and table[0.0]["right_sign"] is None
+    assert table[-0.5]["right_sign"] == 1.0
+    assert table[-1.0]["delta"] == pytest.approx(0.4) and table[-1.0]["right_sign"] == 0.0  # wrong way
+    assert table[1.5]["lpips_bg"] == pytest.approx(0.15) and table[1.5]["n"] == 2
+    assert any(line.startswith("per multiplier") for line in summarize(rows).lines())

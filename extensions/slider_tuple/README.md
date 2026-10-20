@@ -198,6 +198,15 @@ linearity and side effects:
 
 - Outputs: `images/`, `sheets/prompt_NNN.png` (contact sheet per prompt, the
   first thing to look at), `sweep.csv`, `summary.txt` / `summary.json`.
+- **Read the per-multiplier table** at the end of `summary.txt` before the
+  pooled slope. Per strength it lists `delta`, the measure change against the
+  same prompt and seed at m = 0; `delta_sd`; `right_sign`, the share of images
+  that moved in the direction of m; and the mean LPIPS. A working direction
+  has `right_sign` near 1 and `delta` well above `delta_sd`. Then compare that
+  with the LPIPS at the same strength to see the cost. The pooled
+  slope / R² mixes in thresholds and breakdowns at large m.
+- `--resummarize` rewrites the summary and sheets from `sweep.csv` without
+  loading models (e.g. after a tooling update).
 - **Side effects, built in:** `lpips_bg` (change outside the people) and
   `face_lpips` (change on the head crop), each against the same prompt and
   seed at strength 0. Flags in `summary.txt` mark side effects worse at -1
@@ -212,6 +221,7 @@ linearity and side effects:
   per unit of `--m` with `level_norm: none` and ±1 levels, or by one median
   span with `median_span`. For the first weight data that is ~0.05 per
   unit, i.e. ~5% width, which is why `--m 1` looks subtle; sweep to 2-3.
+  The first weight LoRA's results are in NOTES.md ("First weight sweeps").
 - **Raw vs Turbo:** run the same sweep with `--model <Raw folder> --raw`. A
   slope on Raw but not on Turbo means the LoRA doesn't transfer; no slope
   on either means it didn't learn.

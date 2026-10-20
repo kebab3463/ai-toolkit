@@ -47,6 +47,7 @@ from extensions.slider_tuple.sweep import (  # noqa: E402
     head_crop_box,
     load_callable,
     masked_lpips,
+    read_csv,
     summarize,
     write_csv,
 )
@@ -79,6 +80,8 @@ def parse_args():
     p.add_argument("--no-lpips", action="store_true", help="skip background and face LPIPS (and their Sapiens2 / keypoint models)")
     p.add_argument("--lpips-res", type=int, default=512, help="images are resized to this for LPIPS")
     p.add_argument("--margin", type=float, default=0.05, help="flag side effects at m=-1 worse than at +1 by this")
+    p.add_argument("--resummarize", action="store_true",
+                   help="only rewrite summary / sheets from an existing <out>/sweep.csv (no models)")
     p.add_argument("--out", required=True)
     p.add_argument("--device", default="cuda:0")
     args = p.parse_args()
@@ -253,16 +256,24 @@ def main():
     if not args.lora:
         multipliers = [0.0]
 
-    rows = render(args, prompts, seeds, multipliers)
-    rows = measure(args, rows)
-    write_csv(rows, os.path.join(args.out, "sweep.csv"))
+    if args.resummarize:
+        rows = read_csv(os.path.join(args.out, "sweep.csv"))
+    else:
+        rows = render(args, prompts, seeds, multipliers)
+        rows = measure(args, rows)
+        write_csv(rows, os.path.join(args.out, "sweep.csv"))
     for i in range(len(prompts)):
         contact_sheet([r for r in rows if r.prompt_idx == i], os.path.join(args.out, "sheets", f"prompt_{i:03d}.png"))
 
     summary = summarize(rows, margin=args.margin)
-    with open(os.path.join(args.out, "summary.json"), "w") as f:
-        json.dump({"args": vars(args), "positive": summary.positive, "diagnostic": summary.diagnostic,
-                   "flags": summary.flags}, f, indent=2)
+    summary_path = os.path.join(args.out, "summary.json")
+    run_args = vars(args)
+    if args.resummarize and os.path.exists(summary_path):  # keep the arguments the images were rendered with
+        with open(summary_path) as f:
+            run_args = json.load(f).get("args", run_args)
+    with open(summary_path, "w") as f:
+        json.dump({"args": run_args, "positive": summary.positive, "diagnostic": summary.diagnostic,
+                   "flags": summary.flags, "per_m": summary.per_m}, f, indent=2)
     text = "\n".join(summary.lines())
     with open(os.path.join(args.out, "summary.txt"), "w") as f:
         f.write(text + "\n")

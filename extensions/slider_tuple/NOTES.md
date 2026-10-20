@@ -561,3 +561,40 @@ levels (body-warp handoff, W0 + fit/measure only).
   levels (`--out --add-original`, `level_norm: median_span`, so m = 1 is one
   median span), and sweeping to m = 2-3 to see whether the direction is
   learned at all.
+
+### First weight sweeps: Raw vs Turbo (2026-10-20)
+
+`slider_sweep.py --measure body`, the first weight LoRA (step 1000), the 2
+held-out captions x 3 seeds, m in {0, ±0.5, ±1, 1.5, ±2, ±3}; Turbo = BigLove
+int8_convrot (8 steps, CFG off), Raw = BigLove Raw (`--raw`, 25 steps, CFG 4).
+Per-multiplier table (now part of every `summary.txt`):
+
+| m | Turbo delta (right sign) | Turbo bg / face LPIPS | Raw delta (right sign) | Raw bg / face LPIPS |
+| --- | --- | --- | --- | --- |
+| -3 | +0.088 (0.00) | 0.47 / 0.47 | +0.054 (0.33) | 0.46 / 0.34 |
+| -1 | -0.011 (0.50) | 0.11 / 0.16 | +0.017 (0.17) | 0.07 / 0.08 |
+| +1 | +0.014 (0.67) | 0.11 / 0.16 | +0.015 (0.50) | 0.06 / 0.09 |
+| +1.5 | +0.096 (1.00) | 0.19 / 0.24 | +0.047 (0.83) | 0.15 / 0.14 |
+| +2 | +0.187 (1.00) | 0.28 / 0.30 | +0.087 (0.83) | 0.26 / 0.22 |
+| +3 | +0.459 (1.00) | 0.46 / 0.48 | +0.180 (1.00) | 0.56 / 0.42 |
+
+(delta: body-width change against the same prompt/seed at m = 0; m = 0
+scores 0.70-0.75; per-image noise `delta_sd` ~0.03-0.07.)
+
+- **It learned a "heavier" direction, and it transfers to Turbo:** reliable
+  from m = 1.5 (every image wider), visibly heavier at +2 on the contact sheets.
+  Turbo responds about twice as strongly as Raw at the same m, so M6b
+  (Raw->Turbo transfer) is not the bottleneck here.
+- **Threshold, not linear:** nothing measurable at |m| <= 1 (deltas inside
+  the noise, right sign ~50%), then accelerating. Pooled R^2 0.60 / 0.66.
+- **No "thinner" direction:** negative m never narrows the body. Large
+  negative m changes the image (framing, blur) and the score goes *up*
+  (pose changes).
+- **Side effects grow as fast as the effect:** background and face LPIPS are
+  already 0.1-0.16 at m = 1 on Turbo, where the body hasn't changed; faces age
+  at +3, and Raw at +3 breaks the frame (picture-in-picture). Within the
+  trained range the LoRA mostly changes things *other* than the body.
+- Fits the data finding above: the only real signal in the pairs is
+  original -> thinner (~9% width), split as ±1 around the midpoint. Yet
+  the LoRA learned the opposite side better, so the data alone doesn't explain
+  the asymmetry. Evidence is thin (2 prompts x 3 seeds).

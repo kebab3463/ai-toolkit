@@ -120,6 +120,7 @@ class SweepSummary:
     positive: Dict[str, Optional[float]] = field(default_factory=dict)
     diagnostic: Dict[str, Optional[float]] = field(default_factory=dict)
     flags: List[str] = field(default_factory=list)
+    per_m: List[Dict[str, Optional[float]]] = field(default_factory=list)
 
     def lines(self) -> List[str]:
         def fmt(v):
@@ -127,7 +128,38 @@ class SweepSummary:
         out = ["positive range: " + ", ".join(f"{k} {fmt(v)}" for k, v in self.positive.items())]
         out.append("negative diagnostic: " + ", ".join(f"{k} {fmt(v)}" for k, v in self.diagnostic.items()))
         out += [f"FLAG: {f}" for f in self.flags] or ["no flags"]
+        if self.per_m:
+            cell = lambda v, f: "    n/a" if v is None else format(v, f)
+            out += ["", "per multiplier (delta = measure - same prompt/seed at m=0; right_sign = share of deltas",
+                    "with the sign of m; LPIPS means):",
+                    "      m    n   delta  delta_sd  right_sign  lpips_bg  face_lpips"]
+            for r in self.per_m:
+                out.append(f"{r['m']:+7.2f} {r['n']:4d} {cell(r['delta'], '+7.3f')}   {cell(r['delta_sd'], '7.3f')}"
+                           f"     {cell(r['right_sign'], '7.2f')}   {cell(r['lpips_bg'], '7.3f')}     "
+                           f"{cell(r['face_lpips'], '7.3f')}")
         return out
+
+
+def per_multiplier(rows: Sequence[SweepRow]) -> List[Dict[str, Optional[float]]]:
+    """Per m: paired measure change against the same prompt/seed at m = 0, and mean side effects.
+    Paired deltas cancel prompt and seed differences, so they show small effects the pooled
+    fit misses, and a threshold or a breakdown at large m that a single slope hides."""
+    ref = {(r.prompt_idx, r.seed): r.measure for r in rows if math.isclose(r.m, 0.0) and r.measure is not None}
+    out = []
+    for m in sorted({r.m for r in rows}):
+        rs = [r for r in rows if math.isclose(r.m, m)]
+        deltas = [r.measure - ref[(r.prompt_idx, r.seed)] for r in rs
+                  if r.measure is not None and (r.prompt_idx, r.seed) in ref]
+        signed = [d for d in deltas if d != 0]
+        right = None if math.isclose(m, 0.0) or not signed else float(np.mean([np.sign(d) == np.sign(m) for d in signed]))
+        out.append({
+            "m": m, "n": len(rs),
+            "delta": float(np.mean(deltas)) if deltas else None,
+            "delta_sd": float(np.std(deltas)) if len(deltas) > 1 else None,
+            "right_sign": right,
+            "lpips_bg": _at(rs, m, "lpips_bg"), "face_lpips": _at(rs, m, "face_lpips"),
+        })
+    return out
 
 
 def summarize(rows: Sequence[SweepRow], margin: float = 0.05) -> SweepSummary:
@@ -156,6 +188,7 @@ def summarize(rows: Sequence[SweepRow], margin: float = 0.05) -> SweepSummary:
         "face_lpips_at_-1": _at(neg, -1.0, "face_lpips"), "face_lpips_at_+1": _at(pos, 1.0, "face_lpips"),
         "face_sim_at_-1": _at(neg, -1.0, "face_sim"), "face_sim_at_+1": _at(pos, 1.0, "face_sim"),
     }
+    s.per_m = per_multiplier(rows)
     d = s.diagnostic
     if d["lpips_bg_at_-1"] is not None and d["lpips_bg_at_+1"] is not None and d["lpips_bg_at_-1"] > d["lpips_bg_at_+1"] + margin:
         s.flags.append(f"background LPIPS at m=-1 ({d['lpips_bg_at_-1']:.4g}) exceeds m=+1 ({d['lpips_bg_at_+1']:.4g}) by more than {margin}")

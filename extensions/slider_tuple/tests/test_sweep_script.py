@@ -117,3 +117,19 @@ def test_face_and_background_lpips_with_stub_models(tmp_path):
     assert ref.face_lpips == 0.0 and ref.lpips_bg == 0.0
     assert changed.face_lpips > 0.05      # the face change is seen ...
     assert changed.lpips_bg == 0.0        # ... and not counted as background
+
+
+def test_resummarize_reuses_csv_and_args(tmp_path):
+    script = load_script()
+    out, summary = run(script, tmp_path, red_for_m=lambda m: 100 + 40 * m)
+    os.remove(out / "summary.txt")
+    old = sys.argv
+    sys.argv = ["slider_sweep.py", "--prompts", str(tmp_path / "prompts.txt"), "--out", str(out), "--resummarize"]
+    try:
+        script.main()  # no images are read for measuring and no models load
+    finally:
+        sys.argv = old
+    with open(out / "summary.json") as f:
+        again = json.load(f)
+    assert again["args"]["measure"] == summary["args"]["measure"] and again["per_m"]
+    assert (out / "summary.txt").read_text().startswith("positive range:")
