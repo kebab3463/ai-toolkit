@@ -2,6 +2,7 @@
 
 import csv
 import importlib.util
+import json
 import os
 
 import cv2
@@ -92,6 +93,13 @@ def test_paste_back_script_writes_a_tuple_dataset(tmp_path):
     script.main(argv + ["--captions", str(captions)], models=(boom, boom))
     tuples = load_manifest(str(out / "tuples.jsonl"))
     assert [t.caption for t in tuples] == ["a woman in a red room", "a photo of a woman"]
+
+    # JSON captions: --caption-key picks the field; .txt wins over .json
+    (captions / "b.json").write_text(json.dumps({"caption_long": "a long caption", "caption_short": "short"}))
+    script.main(argv + ["--captions", str(captions), "--caption-key", "caption_short"], models=(boom, boom))
+    assert [t.caption for t in load_manifest(str(out / "tuples.jsonl"))] == ["a woman in a red room", "short"]
+    with pytest.raises(SystemExit, match="caption_x"):
+        script.main(argv + ["--captions", str(captions), "--caption-key", "caption_x"], models=(boom, boom))
 
 
 def test_member_spec_validation():

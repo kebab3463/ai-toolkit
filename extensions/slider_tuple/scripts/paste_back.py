@@ -19,8 +19,9 @@ frame:
     <out>/preview/<name>.jpg    raw vs pasted, the heavy-thin difference, and face close-ups
 
 Images already written are reused unless --overwrite, so re-running with new
-captions only rewrites the manifest. Captions: <captions>/<name>.txt if
-present, else --default-caption.
+captions only rewrites the manifest. Captions: <captions>/<name>.txt, or
+<captions>/<name>.json (the string under --caption-key, default caption_long),
+else --default-caption (counted and reported).
 
 Usage (from the repo root):
     .venv/bin/python extensions/slider_tuple/scripts/paste_back.py datasets/weight_slider_data \\
@@ -55,7 +56,8 @@ def parse_args(argv=None):
     p.add_argument("--member", action="append", required=True, metavar="NAME=LEVEL",
                    help="member subfolder and its level, e.g. heavy=1 (repeat per member)")
     p.add_argument("--original", default="orig", help="subfolder with the originals")
-    p.add_argument("--captions", help="folder of <name>.txt captions")
+    p.add_argument("--captions", help="folder of <name>.txt or <name>.json captions")
+    p.add_argument("--caption-key", default="caption_long", help="field to read from .json captions")
     p.add_argument("--default-caption", default="a photo of a woman")
     p.add_argument("--background", type=float, default=0.2, help="loss mask weight outside body and head")
     p.add_argument("--dilate", type=int, default=0, help="body dilation px before blending (0 = 2%% of the short side)")
@@ -81,6 +83,21 @@ def find(folder, stem):
         path = os.path.join(folder, stem + ext)
         if os.path.exists(path):
             return path
+    return None
+
+
+def read_caption(folder, stem, key="caption_long"):
+    """<folder>/<stem>.txt, else the ``key`` string of <folder>/<stem>.json; None if neither exists."""
+    txt, js = os.path.join(folder, stem + ".txt"), os.path.join(folder, stem + ".json")
+    if os.path.exists(txt):
+        with open(txt, encoding="utf-8") as f:
+            return f.read().strip() or None
+    if os.path.exists(js):
+        with open(js, encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data.get(key), str):
+            raise SystemExit(f"{js}: no string field {key!r} (fields: {sorted(data)}); see --caption-key")
+        return data[key].strip() or None
     return None
 
 
@@ -188,7 +205,7 @@ def main(argv=None, models=None):
         os.makedirs(os.path.join(out, sub), exist_ok=True)
 
     matte_fn = keypoints_fn = None
-    report, lines = [], []
+    report, lines, uncaptioned = [], [], []
     for i, stem in enumerate(complete, 1):
         outputs = [os.path.join(out, n, stem + ".png") for n, _ in args.members] + [os.path.join(out, "masks", stem + ".png")]
         if args.overwrite or not all(os.path.exists(p) for p in outputs):
@@ -208,10 +225,10 @@ def main(argv=None, models=None):
         if not os.path.exists(dst):
             shutil.copy2(src, dst)
 
-        caption = args.default_caption
-        if args.captions and os.path.exists(os.path.join(args.captions, stem + ".txt")):
-            with open(os.path.join(args.captions, stem + ".txt"), encoding="utf-8") as f:
-                caption = f.read().strip() or caption
+        caption = read_caption(args.captions, stem, args.caption_key) if args.captions else None
+        if caption is None:
+            caption = args.default_caption
+            uncaptioned.append(stem)
         lines.append(json.dumps({
             "id": stem,
             "caption": caption,
@@ -230,7 +247,8 @@ def main(argv=None, models=None):
     kept = [f"{r['name']}/{r['member']}" for r in report if not r["head_pasted"]]
     print(f"wrote {len(lines)} tuples to {os.path.join(out, 'tuples.jsonl')}"
           + (f"; skipped (missing a member): {skipped}" if skipped else "")
-          + (f"; heads NOT pasted (kept the edit's own): {kept}" if kept else ""))
+          + (f"; heads NOT pasted (kept the edit's own): {kept}" if kept else "")
+          + (f"; {len(uncaptioned)} use --default-caption: {uncaptioned}" if uncaptioned else ""))
     return report
 
 
