@@ -3,14 +3,14 @@
 # slider can keep growing past step 500? Checkpoints and samples every 125 steps.
 #
 # Data: datasets/weight_slider_tuples/measured/ (as runs 2 and 3). Sweep and compare:
-#   .venv/bin/python extensions/slider_tuple/scripts/slider_sweep.py \
-#       --model /home/csprunger/.nvme_cache/diffusion_models/Krea2/BigLoveKreaLife2_int8.safetensors \
-#       --lora output/weight_r4_symmetry/weight_r4_symmetry*.safetensors \
-#       --prompts datasets/weight_slider_tuples/held_out.jsonl \
-#       --multipliers 0,1,2,3 --diagnostic=-1,-2,-3 --measure body --out output/sweeps/weight_r4_symmetry
-#   .venv/bin/python extensions/slider_tuple/scripts/compare_sweeps.py --parity \
-#       output/sweeps/weight_r3b_rank4/* output/sweeps/weight_r4_symmetry/*
-#
+  # .venv/bin/python extensions/slider_tuple/scripts/slider_sweep.py \
+  #     --model /home/csprunger/.nvme_cache/diffusion_models/Krea2/BigLoveKreaLife2_int8.safetensors \
+  #     --lora output/weight_r4_symmetry/weight_r4_symmetry*.safetensors \
+  #     --prompts datasets/weight_slider_tuples/held_out.jsonl \
+  #     --multipliers 0,1,2,3 --diagnostic=-1,-2,-3 --measure body --out output/sweeps/weight_r4_symmetry
+  # .venv/bin/python extensions/slider_tuple/scripts/compare_sweeps.py --parity \
+  #     output/sweeps/weight_r3b_rank4/* output/sweeps/weight_r4_symmetry/*
+
 # Run (from the repo root), or start it from the web UI (README.md, "Web UI"):
 #   .venv/bin/python run.py extensions/slider_tuple/configs/experiments/weight_r4_symmetry.yaml
 ---

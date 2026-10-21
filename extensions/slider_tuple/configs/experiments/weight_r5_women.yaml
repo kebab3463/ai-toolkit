@@ -1,4 +1,5 @@
-# Run 5 (DRAFT, not run yet): a women-only weight slider. Run 4 plus
+# Run 5 (DRAFT, ON HOLD until the symmetry question is settled; then rebase on
+# the winner of 3b / 4b and drop or soften symmetry_*): a women-only weight slider. Run 4 plus
 #  - paired anchors: photos of men with their own captions at strengths up to
 #    +-3, so men stay unchanged (independent control in couple photos);
 #  - loss masks with background 0.5 and head 0.3 instead of 0.2 / 0, so faces
