@@ -357,7 +357,8 @@ Dataset entries take `slider_tuples: <manifest>` with
 `configs/krea2_weight_slider.yaml` (±1 levels) and
 `configs/krea2_weight_slider_measured.yaml` (measured levels) are the training
 templates;
-`configs/dev/` holds the milestone smoke and acceptance configs (NOTES.md).
+`configs/experiments/` holds run-specific A/B configs (each header says what it
+changes and why); `configs/dev/` holds the milestone smoke and acceptance configs (NOTES.md).
 
 ### Code layout
 

@@ -701,3 +701,17 @@ weakness, which is the training budget.
 - **Consequence:** "train longer / higher lr" alone looks like it buys more
   drift than body change. Run 3 should change the learning setup, not just
   the budget. Caveat: 6 images per cell.
+
+### Run 3 plan: budget vs capacity (prepared 2026-10-20)
+
+`configs/experiments/weight_r3a_lr3e-4.yaml` (run 2 with lr 3e-4) and
+`weight_r3b_rank4.yaml` (that, plus rank / alpha 4 instead of 16). Same data
+(the 17 measured tuples, 16 after the span filter), 1000 steps, checkpoints
+every 250, same held-out sweep. Compare the step sweeps: body change vs bg /
+face LPIPS per checkpoint. 3a answers whether faster learning keeps the 500-750
+tradeoff; 3b whether the composition drift is spare LoRA capacity.
+
+Data coverage, for the "more data" question: all 17 training tuples are women;
+11 swimsuit / bikini, 6 seen from behind, 3 mirror selfies. 4 tuples have edit
+spans within ~1.5x the measure's noise. The data is kept fixed for 3a / 3b so
+the comparison stays clean; more data comes after.
