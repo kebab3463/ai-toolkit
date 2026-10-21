@@ -137,7 +137,32 @@ class SweepSummary:
                 out.append(f"{r['m']:+7.2f} {r['n']:4d} {cell(r['delta'], '+7.3f')}   {cell(r['delta_sd'], '7.3f')}"
                            f"     {cell(r['right_sign'], '7.2f')}   {cell(r['lpips_bg'], '7.3f')}     "
                            f"{cell(r['face_lpips'], '7.3f')}")
+            sym = parity(self.per_m)
+            if sym:
+                out += ["", "parity (odd = (delta(+m) - delta(-m)) / 2 is the slider; even = (delta(+m) + delta(-m)) / 2",
+                        "changes both directions alike; a linear slider has even ~0):",
+                        "    |m|      odd     even  lpips_bg(+m)  lpips_bg(-m)"]
+                for r in sym:
+                    out.append(f"{r['m']:7.2f}  {cell(r['odd'], '+7.3f')}  {cell(r['even'], '+7.3f')}"
+                               f"       {cell(r['lpips_bg_plus'], '7.3f')}       {cell(r['lpips_bg_minus'], '7.3f')}")
         return out
+
+
+def parity(per_m: Sequence[Dict[str, Optional[float]]]) -> List[Dict[str, Optional[float]]]:
+    """Per |m| present on both sides: the odd part of the measure change, (delta(+m) - delta(-m)) / 2,
+    which is the slider, and the even part, (delta(+m) + delta(-m)) / 2, a change the same for +m
+    and -m. A linear slider is odd; an even part (and LPIPS equal at +-m) is drift that both
+    directions share, e.g. the LoRA pulling every image toward the training set's common content."""
+    by_m = {r["m"]: r for r in per_m}
+    out = []
+    for m in sorted(m for m in by_m if m > 0 and -m in by_m):
+        plus, minus = by_m[m], by_m[-m]
+        both = plus["delta"] is not None and minus["delta"] is not None
+        out.append({"m": m,
+                    "odd": (plus["delta"] - minus["delta"]) / 2 if both else None,
+                    "even": (plus["delta"] + minus["delta"]) / 2 if both else None,
+                    "lpips_bg_plus": plus["lpips_bg"], "lpips_bg_minus": minus["lpips_bg"]})
+    return out
 
 
 def per_multiplier(rows: Sequence[SweepRow]) -> List[Dict[str, Optional[float]]]:

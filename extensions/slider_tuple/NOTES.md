@@ -734,3 +734,53 @@ change every score, so old and new measurements stop being comparable. Its
 one real advantage is body-part labels (torso vs arms). If arms beside the
 torso turn out to add noise, keypoints (elbows / wrists) or a part
 segmentation could exclude them inside the current measure.
+
+### Run 3 results: budget vs capacity (2026-10-21)
+
+Step sweeps of 3a (lr 3e-4, rank 16) and 3b (lr 3e-4, rank 4); body change
+(right sign) and bg LPIPS, plus parity (`compare_sweeps.py --parity`):
+
+| checkpoint | m=-2 | m=-1 | m=+1 | m=+2 | \|m\|=2 odd / even |
+| --- | --- | --- | --- | --- | --- |
+| run 2 @750 | -0.037 (1.00) 0.05 | -0.010 (0.83) 0.03 | +0.012 (0.83) 0.02 | +0.020 (1.00) 0.06 | +0.029 / -0.009 |
+| 3a @500 | -0.046 (1.00) 0.26 | -0.038 (0.67) 0.11 | +0.048 (1.00) 0.15 | +0.172 (1.00) 0.33 | +0.109 / +0.063 |
+| 3a @750 | +0.064 (0.17) 0.30 | +0.007 (0.67) 0.17 | +0.121 (1.00) 0.22 | +0.579 (1.00) 0.43 | +0.258 / +0.321 |
+| 3b @500 | **-0.068 (1.00) 0.11** | **-0.029 (1.00) 0.06** | **+0.022 (1.00) 0.06** | **+0.119 (1.00) 0.14** | **+0.093 / +0.025** |
+| 3b @750 | -0.004 (0.67) 0.31 | -0.022 (0.83) 0.13 | +0.112 (1.00) 0.14 | +0.518 (1.00) 0.33 | +0.261 / +0.257 |
+| 3b @1000 | +0.111 (0.00) 0.36 | +0.015 (0.33) 0.19 | +0.192 (1.00) 0.20 | +0.508 (1.00) 0.38 | +0.199 / +0.309 |
+
+- **3b @500 is the first usable slider:** visibly slimmer at -3 and heavier
+  at +3 on the contact sheets, pose / face / background mostly kept, right sign
+  at every strength. The body change is still only ~25% of the data's at ±1
+  (target ±0.114 per unit m), ~30-50% at ±2.
+- **Rank 4 beats rank 16 at the same lr and step:** about 2x less background
+  drift for the same or larger body change at step 500, and a clean negative
+  side. Lower capacity helps.
+- **lr 3e-4 learns ~3x faster than run 2, then degenerates after ~500:**
+  the heavier side grows faster than linearly (+3 balloons into grotesque
+  shapes by 1000, partly unmeasurable), the thinner side stalls and then
+  reverses (at 1000, -2 / -3 make the body *wider*, shorter and distorted), and
+  bg / face LPIPS reach 0.3-0.5. Body change per bg LPIPS on the + side looks
+  better late, but only because the measure rewards the exaggeration; the
+  images show it.
+- **Mechanism: the even part.** Background LPIPS is the same at +m and -m in
+  every run, and the even part of the body change grows faster than the odd
+  part (3b at |m| = 2: odd / even 0.005 / 0.004 at 250, 0.093 / 0.025 at
+  500, 0.261 / 0.257 at 750, 0.199 / 0.309 at 1000). Centering cancels the
+  members' shared content only in the part of the LoRA's effect that is
+  linear in the multiplier. With v(s) = v0 + s d + s^2 e + ..., the loss
+  gradient on d is sum_i w_i s_i (v0 - y_i), where the shared content cancels
+  since sum w s = 0. On e it is sum_i w_i s_i^2 (v0 - y_i) = (v0 - c) sum w s^2
+  - ..., where it does *not*: the even part is trained toward the members'
+  common content c (these heavy women, poses, backgrounds, the Qwen look)
+  whichever way the LoRA is turned. A LoRA has no separate e. It appears
+  through the network's nonlinearity once the LoRA is large, which is why it
+  shows up late and faster at the higher lr. Scene-prompt anchors don't touch
+  it (wrong prompts, only |m| <= 1).
+- Candidate fixes: (1) a symmetry loss on the training images,
+  ||(v(+s) + v(-s)) / 2 - v(0)||^2 with the batch's own noisy latent and
+  caption, s up to 2-3, v(0) frozen. It penalizes only the even part, so the
+  slider (odd part) stays free. (2) Higher background / head mask weights:
+  every member shares them, so any LoRA change there costs loss (penalizes odd
+  and even drift there, but only within the trained multipliers). (3) Early
+  stopping / lower lr with rank 4 as the baseline: 3b @500.

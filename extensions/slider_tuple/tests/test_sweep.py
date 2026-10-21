@@ -139,3 +139,14 @@ def test_per_multiplier_paired_deltas_and_sign():
     assert table[-1.0]["delta"] == pytest.approx(0.4) and table[-1.0]["right_sign"] == 0.0  # wrong way
     assert table[1.5]["lpips_bg"] == pytest.approx(0.15) and table[1.5]["n"] == 2
     assert any(line.startswith("per multiplier") for line in summarize(rows).lines())
+
+
+def test_parity_splits_odd_slider_from_even_drift():
+    # measure = seed + 0.1 m (odd) + 0.05 m^2 (even: both directions widen)
+    rows = rows_for(lambda m, seed: seed + 0.1 * m + 0.05 * m * m, lpips_fn=lambda m: abs(m) / 10)
+    from extensions.slider_tuple.sweep import parity
+    table = {r["m"]: r for r in parity(summarize(rows).per_m)}
+    assert sorted(table) == [0.5, 1.0]  # only |m| present on both sides
+    assert table[1.0]["odd"] == pytest.approx(0.1) and table[1.0]["even"] == pytest.approx(0.05)
+    assert table[0.5]["lpips_bg_plus"] == pytest.approx(table[0.5]["lpips_bg_minus"])
+    assert any(line.startswith("parity") for line in summarize(rows).lines())

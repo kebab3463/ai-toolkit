@@ -6,8 +6,8 @@ direction of m (right_sign) and mean background / face LPIPS. Use it to
 compare training runs on the same held-out prompts and seeds, or a run's
 step checkpoints to see whether the effect is still growing.
 
-Folders whose names end in a step number (..._000000250) are ordered by it,
-with a folder without one (the final save) last; others keep the given order.
+Folders are grouped by run (in the order given): a run's step checkpoints
+(<run>_000000250, ...) by step, then its final save (<run>).
 
 Usage (from the repo root):
     .venv/bin/python extensions/slider_tuple/scripts/compare_sweeps.py \\
@@ -24,15 +24,21 @@ import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
 
-from extensions.slider_tuple.sweep import per_multiplier, read_csv  # noqa: E402
+from extensions.slider_tuple.sweep import parity, per_multiplier, read_csv  # noqa: E402
 
 
 def order(folders):
-    """Step checkpoints by step, the final save (no step number) last; other names keep their order."""
-    steps = [re.search(r"_(\d+)$", os.path.basename(os.path.normpath(f))) for f in folders]
-    if not any(steps):
-        return list(folders)
-    return [f for _, f in sorted(zip(steps, folders), key=lambda x: (x[0] is None, int(x[0].group(1)) if x[0] else 0))]
+    """Grouped by run (first appearance), each run's step checkpoints by step with its final
+    save (the folder named like the run, no step number) last."""
+    runs, keys = [], []
+    for f in folders:
+        name = os.path.basename(os.path.normpath(f))
+        match = re.search(r"^(.*)_(\d+)$", name)
+        run, step = (match.group(1), int(match.group(2))) if match else (name, None)
+        if run not in runs:
+            runs.append(run)
+        keys.append((runs.index(run), step is None, step or 0))
+    return [f for _, f in sorted(zip(keys, folders), key=lambda x: x[0])]
 
 
 def label(folder):
@@ -58,6 +64,8 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("folders", nargs="+")
     p.add_argument("--csv", help="also write the table as long-format CSV")
+    p.add_argument("--parity", action="store_true",
+                   help="also print, per sweep (rows) and |m|, the odd (slider) and even (shared drift) parts")
     args = p.parse_args(argv)
 
     data = table(order(args.folders))
@@ -77,6 +85,23 @@ def main(argv=None):
                          f"{fmt(r['lpips_bg'], '.2f')}/{fmt(r['face_lpips'], '.2f')}".rjust(width))
         lines.append(f"{m:+6.2f}  " + "  ".join(cells))
     print("\n".join(lines))
+
+    if args.parity:
+        mags = sorted({m for rows in data.values() for m in rows if m > 0 and -m in rows})
+        out = ["", "parity: odd / even part of delta, bg LPIPS at +m / -m (a linear slider has even ~0)",
+               f"{'sweep':>{width}}" + "".join(f"  |m|={a:g}: odd   even   bg+  bg-" for a in mags)]
+        for n in names:
+            sym = {r["m"]: r for r in parity([data[n][m] for m in sorted(data[n])])}
+            cells = []
+            for a in mags:
+                r = sym.get(a)
+                if r is None:
+                    cells.append(" " * 31 + "n/a")
+                    continue
+                cells.append(f"  {fmt(r['odd'], '+.3f'):>8} {fmt(r['even'], '+.3f'):>6} "
+                             f"{fmt(r['lpips_bg_plus'], '.2f'):>5} {fmt(r['lpips_bg_minus'], '.2f'):>4}")
+            out.append(f"{n[-width:]:>{width}}" + "".join(cells))
+        print("\n".join(out))
 
     if args.csv:
         with open(args.csv, "w", newline="") as f:

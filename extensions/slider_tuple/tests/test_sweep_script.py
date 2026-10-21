@@ -165,6 +165,9 @@ def test_several_loras_go_to_their_own_folders_and_compare(tmp_path, capsys):
     folders = [str(out / "run"), str(out / "run_000000250")]
     assert [os.path.basename(f) for f in compare.order(folders)] == ["run_000000250", "run"]  # final save last
     assert compare.order(["b_v1", "a_v2"]) == ["b_v1", "a_v2"]
+    two_runs = ["x/ra_000000250", "x/rb_000000250", "x/ra_000000500", "x/rb_000000500", "x/ra", "x/rb"]
+    assert compare.order(two_runs) == ["x/ra_000000250", "x/ra_000000500", "x/ra",
+                                       "x/rb_000000250", "x/rb_000000500", "x/rb"]
     capsys.readouterr()
     data = compare.main(folders + ["--csv", str(tmp_path / "cmp.csv")])
     assert data["run"][1.0]["delta"] == pytest.approx(40) and data["run_000000250"][1.0]["delta"] == pytest.approx(10)

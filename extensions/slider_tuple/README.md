@@ -252,6 +252,14 @@ linearity and side effects:
   has `right_sign` near 1 and `delta` well above `delta_sd`. Then compare that
   with the LPIPS at the same strength to see the cost. The pooled
   slope / R² mixes in thresholds and breakdowns at large m.
+- **Parity** (end of `summary.txt`, or `compare_sweeps.py --parity`): the
+  measure change split into the part that flips with the sign of m (`odd`:
+  the slider) and the part that is the same for +m and −m (`even`). A linear
+  slider has `even` ≈ 0. A growing `even` part together with equal background
+  LPIPS at ±m is shared drift: the LoRA pulling every image toward the
+  training data's common content, whichever way it is turned. In the weight
+  runs it grew faster than the slider with training and marked where
+  checkpoints turned bad (NOTES.md, "Run 3").
 - `--resummarize` rewrites the summary and sheets from `sweep.csv` without
   loading models (e.g. after a tooling update).
 - **Compare runs:** sweep each run with the same prompts, seeds and

@@ -4,11 +4,11 @@
 #
 # Data: datasets/weight_slider_tuples/measured/ (as run 2). Compare with
 # step sweeps (README.md section 4, "Is it still learning?"):
-#   .venv/bin/python extensions/slider_tuple/scripts/slider_sweep.py \
-#       --model /home/csprunger/.nvme_cache/diffusion_models/Krea2/BigLoveKreaLife2_int8.safetensors \
-#       --lora output/weight_r3b_rank4/weight_r3b_rank4*.safetensors \
-#       --prompts datasets/weight_slider_tuples/held_out.jsonl \
-#       --multipliers 0,1,2,3 --diagnostic=-1,-2,-3 --measure body --out output/sweeps/weight_r3b_rank4
+  # .venv/bin/python extensions/slider_tuple/scripts/slider_sweep.py \
+  #     --model /home/csprunger/.nvme_cache/diffusion_models/Krea2/BigLoveKreaLife2_int8.safetensors \
+  #     --lora output/weight_r3b_rank4/weight_r3b_rank4*.safetensors \
+  #     --prompts datasets/weight_slider_tuples/held_out.jsonl \
+  #     --multipliers 0,1,2,3 --diagnostic=-1,-2,-3 --measure body --out output/sweeps/weight_r3b_rank4
 #
 # Run (from the repo root):
 #   .venv/bin/python run.py extensions/slider_tuple/configs/experiments/weight_r3b_rank4.yaml
