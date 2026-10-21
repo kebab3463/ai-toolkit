@@ -784,3 +784,27 @@ Step sweeps of 3a (lr 3e-4, rank 16) and 3b (lr 3e-4, rank 4); body change
   every member shares them, so any LoRA change there costs loss (penalizes odd
   and even drift there, but only within the trained multipliers). (3) Early
   stopping / lower lr with rank 4 as the baseline: 3b @500.
+
+### Web UI integration and run 4 (2026-10-21)
+
+- **Trainer:** `SliderTupleTrainer` now subclasses `DiffusionTrainer`
+  (SDTrainer + UI status: progress, stop, sample / save now via the UI's
+  sqlite DB). It reports only when started by the UI (`sqlite_db_path` in the
+  config + `AITK_JOB_ID`); from `run.py` it behaves as before.
+- **Jobs:** `scripts/ui_jobs.py add` writes a Job row per config (the UI's
+  prisma schema; timestamps in ms) with `training_folder` from the UI settings
+  and `sample.samples`. The UI's grid needs `samples` (it reads
+  `sample.samples.length` and would throw on a `prompts`-only config). The
+  existing grid already lays out samples by rows of `len(samples)`. An edit
+  adding step / prompt labels was tried and reverted to keep the UI upstream.
+  Registered: runs 1, 2, 3a, 3b (completed) and run 4 (stopped). DB backup
+  before the change in the session scratchpad.
+- **Plugin tab:** the UI shows `output/<job>/plugin.html` in a sandboxed,
+  load-once iframe, a hook for slider-specific result views (sweep tables,
+  parity, contact sheets) without touching the UI. Not used yet.
+- **Run 4:** `configs/experiments/weight_r4_symmetry.yaml`, run 3b +
+  `symmetry_strength: 10`, `symmetry_max_multiplier: 3`, `symmetry_prob: 0.5`,
+  checkpoints and samples every 125 steps. The strength is a guess: the
+  drift is driven by the base model's full prediction error on the training
+  images (times s^2), so a weak pull-back would balance it only at a large
+  drift. Watch `slider/symmetry_loss` and the sweep's parity.

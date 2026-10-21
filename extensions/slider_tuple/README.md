@@ -213,6 +213,28 @@ What to edit (all commented in the file):
 - `sample.prompts`: held-out captions with `--m -1`, `--m 0`, `--m 1`
   (same seed, `walk_seed: false`, so only the strength differs).
 
+**From the web UI instead:** register the config as a UI job, then start it
+from the browser (Jobs → the job → start). It shows status, progress, loss
+graphs and the samples as a grid (one row per sample step, one column per
+prompt), and stop / sample now / save now work:
+
+```bash
+.venv/bin/python extensions/slider_tuple/scripts/ui_jobs.py add config/my_slider.yaml
+.venv/bin/python extensions/slider_tuple/scripts/ui_jobs.py list
+```
+
+- `add` takes any number of configs. A run that already finished in the UI's
+  training folder (`output/<name>/<name>.safetensors`) is added as completed,
+  so past experiments and their samples show up too. Everything else is added
+  stopped, ready to start.
+- The stored job config sets `training_folder` to the UI's and writes
+  `sample.prompts` as `sample.samples`, the form the UI's grid reads. Python
+  takes either.
+- After editing a config, `add --update` replaces a job's config (not while
+  it is running or queued). The UI reads its database live, so no restart.
+- The trainer is built on the UI's `DiffusionTrainer`, which reports to the UI
+  only when the UI started the run; from the command line nothing changes.
+
 During training:
 
 - **Startup log:** tuples kept / dropped (`min_span`), the masked-loss count,
@@ -357,6 +379,7 @@ Dataset entries take `slider_tuples: <manifest>` with
 | `scripts/slider_sweep.py` | linearity and side-effect sweep on Turbo (§4) |
 | `scripts/compare_sweeps.py` | per-multiplier tables of several sweeps side by side (§4) |
 | `scripts/image_lpips.py` | LPIPS between images |
+| `scripts/ui_jobs.py` | register configs (and finished runs) as web UI jobs (§3) |
 | `scripts/dev/compare_runs.py` | two configs, same seed, short runs: loss / speed / memory A/B |
 | `scripts/dev/make_smoke_pairs.py` | synthetic pairs for plumbing tests (not training data) |
 | `scripts/dev/make_band_masks.py` | placeholder masks for plumbing tests |
