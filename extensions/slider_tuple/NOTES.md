@@ -668,8 +668,7 @@ edits. Then paste-back can register them (it only accepts ±5% scale).
 smooths scores along the frame index (cubic fit; per-frame noise is ~0.03),
 and picks K frames closest to evenly spaced targets between the tuple's real
 top / bottom members (`--top`, `--bottom`), exporting them as `mid<k>/`
-member folders. Expected value of larger tuples: see the 2026-10-20 reply in
-the session log. Briefly: modest. The middle members train at small
+member folders. Expected value of larger tuples: modest. The middle members train at small
 multipliers (s near 0 adds little gradient, influence grows with s^2), so they
 mainly constrain linearity and add samples. They don't fix run 2's
 weakness, which is the training budget.
