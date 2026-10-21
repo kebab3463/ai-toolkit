@@ -36,9 +36,9 @@ def make_db(path, training_folder):
 
 def write_config(path, name):
     config = {"job": "extension", "config": {"name": name, "process": [{
-        "type": "slider_tuple_trainer", "training_folder": "output", "train": {"steps": 1000},
+        "type": "slider_tuple_trainer", "training_folder": "output", "train": {"steps": 1000, "lr": "LR"},
         "sample": {"sample_every": 125, "prompts": ["a --m -1", "a --m 0", "a --m 1"]}}]}}
-    path.write_text(yaml.safe_dump(config))
+    path.write_text(yaml.safe_dump(config).replace("LR", "3e-4"))  # written like the configs: no decimal point
     return str(path)
 
 
@@ -62,6 +62,7 @@ def test_add_new_and_finished_runs_and_update(tmp_path):
     assert stored["training_folder"] == str(out)
     assert stored["sample"]["samples"] == [{"prompt": "a --m -1"}, {"prompt": "a --m 0"}, {"prompt": "a --m 1"}]
     assert "prompts" not in stored["sample"]
+    assert stored["train"]["lr"] == 3e-4  # a number, as run.py reads it (plain YAML 1.1 gives "3e-4")
 
     assert "already a UI job" in script.main(["--db", db_path, "add", fresh])[0]
     db.execute("UPDATE Job SET status = 'running' WHERE name = 'fresh_run'")

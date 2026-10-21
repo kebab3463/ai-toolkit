@@ -37,13 +37,19 @@ import time
 import uuid
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+sys.path.insert(0, REPO_ROOT)
 
 
 def load_config(path):
+    """The config as run.py parses it: ai-toolkit's YAML loader, which reads exponents
+    without a decimal point (lr: 3e-4) as numbers where plain YAML 1.1 makes them strings.
+    ${ENV} references stay as written; run.py replaces them when the job starts."""
     import yaml
 
+    from toolkit.config import fixed_loader
+
     with open(path, encoding="utf-8") as f:
-        config = yaml.safe_load(f) if path.endswith((".yaml", ".yml")) else json.load(f)
+        config = yaml.load(f, Loader=fixed_loader) if path.endswith((".yaml", ".yml")) else json.load(f)
     if not isinstance(config, dict) or "config" not in config or not config["config"].get("process"):
         raise SystemExit(f"{path}: not a job config (needs config.process)")
     if not config["config"].get("name"):
