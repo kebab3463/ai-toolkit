@@ -159,6 +159,39 @@ Check that the edits actually change the attribute, and by how much:
   when the other members are real photos too, or when real-vs-synthetic
   differences don't matter. Next to pass-through edits it works against them.
 
+### 2e. Intermediate members from interpolated frames (optional)
+
+Turning pairs into larger tuples: render a sequence that morphs each top
+member into its bottom one (e.g. video frames, named `<tuple id>_<index>.png`),
+then measure every frame and pick a few evenly spaced in body width:
+
+```bash
+.venv/bin/python extensions/slider_tuple/scripts/measure_images.py datasets/weight_slider_tuples/mmh3 \
+    --top datasets/weight_slider_tuples/heavy --bottom datasets/weight_slider_tuples/thin \
+    --pick 2 --preview --export
+```
+
+- Scores are smoothed along the frame index (the measure's per-image noise
+  is ~0.03), and picks are the frames closest to evenly spaced targets
+  strictly between the tuple's actual top and bottom members.
+- Check `mmh3_measure/groups.csv` (flags: span within noise, scores not
+  monotone along the frames, frames not covering the range) and
+  `preview/<id>.png` (score curve with picks, thumbnails).
+- `--export` copies the picks to `mmh3_measure/export/mid1/<id>.png`,
+  `mid2/...` (mid1 nearest the top). These are member folders in the layout
+  `paste_back.py` reads.
+- **Before using picks as members, give them the other members' processing
+  and framing.** Run them through the same editor as the edits (for the
+  weight data: Qwen Image 2.1, with the original as reference to restore the
+  frame edges the 9:16 video crop removed). Then put the folders next to the
+  others and paste back with all members, e.g. `--member heavy=1
+  --member mid1=0.33 --member mid2=-0.33 --member thin=-1`. Re-measure with
+  `measure_tuples.py --out` (§2d): the editor pass can change the body a
+  little, so the measured levels after it are the ones to train on.
+  Paste-back's registration only accepts near-identity alignments (±5%
+  scale), so raw cropped frames would be rejected.
+- Picking before the editor pass means only the picks need editing.
+
 ## 3. Train
 
 ```bash
@@ -312,6 +345,7 @@ Dataset entries take `slider_tuples: <manifest>` with
 | `scripts/pairs_to_manifest.py` | before/after folders → `tuples.jsonl` (§2b) |
 | `scripts/split_holdout.py` | train / held-out manifests (§2c) |
 | `scripts/measure_tuples.py` | body-width measure of every member; measured levels (§2d) |
+| `scripts/measure_images.py` | measure a folder of frames; pick evenly spaced intermediates per tuple (§2e) |
 | `scripts/slider_sweep.py` | linearity and side-effect sweep on Turbo (§4) |
 | `scripts/compare_sweeps.py` | per-multiplier tables of several sweeps side by side (§4) |
 | `scripts/image_lpips.py` | LPIPS between images |

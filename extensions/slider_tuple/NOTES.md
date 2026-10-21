@@ -652,3 +652,24 @@ little.
   the LoRA needs to grow several times larger: more steps or a higher lr, not
   a different design. Next: checkpoint sweep (does delta still grow from
   step 250 to 1000?), then run 3 with more training.
+
+### Intermediate frames for larger tuples (2026-10-20)
+
+The user rendered `datasets/weight_slider_tuples/mmh3/<id>_<001..105 step 4>.png`
+(27 frames per tuple, MiniMax H3 interpolating original -> thin). They are
+768x1376 (9:16; MiniMax H3 doesn't support 2:3), so narrower and smaller than
+the originals (864x1536, 1024x1536): not in the original's frame. The user
+plans to run picks through Qwen Image 2.1 with the original as reference, which
+restores the missing edges and gives them the same look as the heavy / thin
+edits. Then paste-back can register them (it only accepts ±5% scale).
+`mmh3_v0/` (128 frames of one tuple) is an earlier attempt.
+
+`scripts/measure_images.py` measures a folder (cached in `measurements.csv`),
+smooths scores along the frame index (cubic fit; per-frame noise is ~0.03),
+and picks K frames closest to evenly spaced targets between the tuple's real
+top / bottom members (`--top`, `--bottom`), exporting them as `mid<k>/`
+member folders. Expected value of larger tuples: see the 2026-10-20 reply in
+the session log. Briefly: modest. The middle members train at small
+multipliers (s near 0 adds little gradient, influence grows with s^2), so they
+mainly constrain linearity and add samples. They don't fix run 2's
+weakness, which is the training budget.
