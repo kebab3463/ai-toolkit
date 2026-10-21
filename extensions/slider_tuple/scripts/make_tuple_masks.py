@@ -41,6 +41,8 @@ def parse_args(argv=None):
     p.add_argument("--mask-dir", default="masks", help="folder for the masks, relative to the output manifest")
     p.add_argument("--background", type=float, default=0.2)
     p.add_argument("--body", type=float, default=1.0)
+    p.add_argument("--head-weight", type=float, default=0.0,
+                   help="loss weight on the head (0 = face left out; keep below --background)")
     p.add_argument("--head-margin", type=float, default=0.15, help="enlarge the estimated head ellipse by this fraction")
     p.add_argument("--kp-score", type=float, default=1.0, help="minimum keypoint score counted as visible")
     p.add_argument("--head-masks", help="folder of <tuple id>.png head masks to use instead of keypoints")
@@ -49,7 +51,8 @@ def parse_args(argv=None):
     return p.parse_args(argv)
 
 
-def tuple_mask(images, matte_fn, keypoints_fn, head_mask=None, background=0.2, body=1.0, head_margin=0.15, kp_score=1.0):
+def tuple_mask(images, matte_fn, keypoints_fn, head_mask=None, background=0.2, body=1.0, head_margin=0.15, kp_score=1.0,
+               head_weight=0.0):
     """(mask H x W, head found) for one tuple's member images (PIL RGB, same size)."""
     size = images[0].size
     body_union = union([matte_fn(img) for img in images])
@@ -66,7 +69,7 @@ def tuple_mask(images, matte_fn, keypoints_fn, head_mask=None, background=0.2, b
         if not heads:
             return None, False
         head = union(heads)
-    return compose(body_union, head, background=background, body_weight=body), True
+    return compose(body_union, head, background=background, body_weight=body, head_weight=head_weight), True
 
 
 def run(args, matte_fn, keypoints_fn):
@@ -87,7 +90,7 @@ def run(args, matte_fn, keypoints_fn):
             if os.path.exists(path):
                 head_mask = Image.open(path)
         mask, found = tuple_mask(images, matte_fn, keypoints_fn, head_mask,
-                                 args.background, args.body, args.head_margin, args.kp_score)
+                                 args.background, args.body, args.head_margin, args.kp_score, args.head_weight)
         entry = rebase_entry(raw[t.id], src_dir, out_dir)
         for m in entry["members"]:
             m.pop("mask", None)

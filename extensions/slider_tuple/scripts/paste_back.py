@@ -61,6 +61,8 @@ def parse_args(argv=None):
     p.add_argument("--caption-key", default="caption_long", help="field to read from .json captions")
     p.add_argument("--default-caption", default="a photo of a woman")
     p.add_argument("--background", type=float, default=0.2, help="loss mask weight outside body and head")
+    p.add_argument("--head-weight", type=float, default=0.0,
+                   help="loss mask weight on the pasted head (0 = face left out; keep below --background)")
     p.add_argument("--dilate", type=int, default=0, help="body dilation px before blending (0 = 2%% of the short side)")
     p.add_argument("--seam", type=float, default=0, help="seam blur px (0 = 0.4%% of the short side)")
     p.add_argument("--head-margin", type=float, default=0.15)
@@ -148,7 +150,7 @@ def process(stem, args, matte_fn, keypoints_fn):
             "head_shift_px": "" if fit is None or center is None else
             "%.2f,%.2f" % fit.shift_at(*center),
         })
-    loss_mask = compose(body_union, union(heads), background=args.background)
+    loss_mask = compose(body_union, union(heads), background=args.background, head_weight=args.head_weight)
     return original, registered, pasted, loss_mask, union(heads), rows
 
 

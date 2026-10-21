@@ -59,13 +59,34 @@ def head_ellipse(keypoints: np.ndarray, size, min_score: float = 1.0, margin: fl
     return ((((xs - cx) / rx) ** 2 + ((ys - cy) / ry) ** 2) <= 1.0).astype(np.float32)
 
 
-def compose(body: np.ndarray, head: np.ndarray, background: float = 0.2, body_weight: float = 1.0) -> np.ndarray:
-    """Loss mask in [0, 1] (H x W): background + (body_weight - background) * body, head -> 0."""
+def compose(body: np.ndarray, head: np.ndarray, background: float = 0.2, body_weight: float = 1.0,
+            head_weight: float = 0.0) -> np.ndarray:
+    """Loss mask in [0, 1] (H x W): background + (body_weight - background) * body, head -> head_weight.
+
+    head_weight 0 (default) leaves the face out of the loss. Above 0 it trains the pasted-back
+    head, which is the same in every member, so any change the LoRA makes to a face costs loss
+    ("keep the face"). Keep it below background if the masks may be reweighted later:
+    decompose() (reweight_masks.py) tells the head from the rest by that."""
     if not 0 <= background <= body_weight <= 1:
         raise ValueError("need 0 <= background <= body_weight <= 1")
+    if not 0 <= head_weight <= 1:
+        raise ValueError("need 0 <= head_weight <= 1")
     mask = background + (body_weight - background) * np.clip(body, 0.0, 1.0)
-    mask[np.asarray(head) >= 0.5] = 0.0
+    mask[np.asarray(head) >= 0.5] = head_weight
     return mask.astype(np.float32)
+
+
+def decompose(mask: np.ndarray, background: float = 0.2, body_weight: float = 1.0,
+              head_weight: float = 0.0) -> tuple:
+    """(body, head) back from a compose() mask in [0, 1] made with these weights; head_weight must
+    be below background. Inverse of compose up to 8-bit rounding."""
+    if not head_weight < background < body_weight:
+        raise ValueError("decompose needs head_weight < background < body_weight")
+    tol = 0.5 / 255
+    head = (np.abs(mask - head_weight) <= tol).astype(np.float32)
+    body = np.clip((mask - background) / (body_weight - background), 0.0, 1.0)
+    body[head > 0] = 0.0
+    return body.astype(np.float32), head
 
 
 def to_png_array(mask: np.ndarray) -> np.ndarray:
