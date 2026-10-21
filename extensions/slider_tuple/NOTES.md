@@ -672,3 +672,32 @@ member folders. Expected value of larger tuples: modest. The middle members trai
 multipliers (s near 0 adds little gradient, influence grows with s^2), so they
 mainly constrain linearity and add samples. They don't fix run 2's
 weakness, which is the training budget.
+
+### Run 2 checkpoints: is it still learning? (2026-10-20)
+
+`slider_sweep.py --lora <run 2>_*.safetensors` (steps 250 / 500 / 750, m in
+{0, ±1, ±2, ±3}) + `compare_sweeps.py ... output/sweeps/weight_v2_turbo`:
+
+| m | step 250 | step 500 | step 750 | step 1000 |
+| --- | --- | --- | --- | --- |
+| -3 | +0.003 (0.33) 0.01/0.02 | -0.033 (1.00) 0.05/0.04 | -0.055 (1.00) 0.08/0.10 | -0.055 (1.00) 0.18/0.18 |
+| -2 | -0.002 (0.50) 0.01/0.02 | -0.014 (1.00) 0.02/0.03 | -0.037 (1.00) 0.05/0.08 | -0.045 (0.83) 0.12/0.12 |
+| -1 | -0.000 (0.50) 0.01/0.01 | +0.002 (0.17) 0.01/0.02 | -0.010 (0.83) 0.03/0.05 | -0.015 (0.83) 0.05/0.06 |
+| +1 | +0.001 (0.67) 0.01/0.04 | +0.001 (0.83) 0.01/0.04 | +0.012 (0.83) 0.02/0.05 | +0.006 (1.00) 0.05/0.07 |
+| +2 | +0.001 (0.83) 0.01/0.03 | +0.013 (1.00) 0.02/0.04 | +0.020 (1.00) 0.06/0.10 | +0.025 (0.83) 0.13/0.17 |
+| +3 | -0.003 (0.50) 0.01/0.03 | +0.014 (0.83) 0.03/0.06 | +0.026 (0.83) 0.09/0.12 | +0.056 (0.83) 0.18/0.22 |
+
+- Nothing at step 250. The direction appears by 500 and grows to 750.
+- **750 -> 1000 mostly added side effects:** the body change at -3 stayed at
+  -0.055 and grew a little at -2 / +3, while bg and face LPIPS roughly doubled
+  at ±2 / ±3. Body change per unit of bg LPIPS at -3: 0.69 (500), 0.69 (750),
+  0.31 (1000). Step 750 is the best tradeoff of the four.
+- What the extra side effect is (contact images, m = ±3, 750 vs 1000):
+  framing / composition drift. The camera zooms or shifts slightly, the
+  person moves, background details (wall folds, surf) re-arrange, and faces
+  change a little. Those are high-noise decisions like body shape itself, so a
+  timestep window (F5) would not obviously separate them. It would help
+  more with texture / face detail.
+- **Consequence:** "train longer / higher lr" alone looks like it buys more
+  drift than body change. Run 3 should change the learning setup, not just
+  the budget. Caveat: 6 images per cell.
