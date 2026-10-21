@@ -808,3 +808,30 @@ Step sweeps of 3a (lr 3e-4, rank 16) and 3b (lr 3e-4, rank 4); body change
   drift is driven by the base model's full prediction error on the training
   images (times s^2), so a weak pull-back would balance it only at a large
   drift. Watch `slider/symmetry_loss` and the sweep's parity.
+
+### Women-only slider prep: paired anchors, head weight (2026-10-21)
+
+The user wants a women-only weight LoRA (and a men-only one after), to change
+each person independently in couple photos. Built while run 4 trains:
+
+- **Paired anchors** (`anchors.load_anchor_pool`): `anchor_images` whose files
+  all have captions become image + own-caption anchors (captions encoded
+  before the text encoder unloads). The old anchor design noised the step's
+  training image (a woman) and conditioned it on an unrelated prompt, a weak
+  and mismatched target. Photos of men with their captions teach "men stay
+  unchanged" directly. `anchor_max_multiplier` 3 covers the strengths where
+  drift showed.
+- **Head weight** in loss masks (`compose(head_weight=)`, `--head-weight`,
+  `reweight_masks.py`). Head 0 meant faces got no "keep this" signal although
+  paste-back made them identical across members. That is the direct lever on
+  women's face drift; men anchors protect men's faces only.
+  `datasets/weight_slider_tuples/measured_bg05_head03/` = the measured
+  manifests with background 0.5, head 0.3 (the real masks hold exactly 51 / 0
+  for background / head, so decompose is exact up to rounding).
+- **Run 5 draft:** `configs/experiments/weight_r5_women.yaml` = run 4 + men
+  anchors + bg 0.5 / head 0.3 masks. Needs `datasets/men_anchors/` (30-100
+  captioned men photos in similar scenes) and held-out men captions for a
+  second sweep (body change ~0, low LPIPS expected). Revisit after run 4.
+- **Not yet built:** per-person measurement for couple photos (the measure
+  takes the most confident detection). Needed for the couple test once the
+  single-person results look right.

@@ -93,8 +93,15 @@ only rewrote the manifest.)
   `--caption-key` (default `caption_long`; e.g. `caption_short`). Tuples without
   one get `--default-caption`, and the final line lists them.
 - Output: `heavy/`, `thin/`, `original/`, `masks/` (one loss mask per tuple:
-  body 1, head 0, background `--background` 0.2), `tuples.jsonl`,
+  body 1, background `--background` 0.2, head `--head-weight` 0), `tuples.jsonl`,
   `report.csv`, `preview/`.
+- **Mask weights:** the head and background are the same in every member
+  after paste-back, so a weight above 0 there trains "keep this as is": the
+  LoRA pays for changing faces or backgrounds. Head 0 leaves faces out of the
+  loss entirely. To change the weights of existing masks without re-running
+  anything, use `scripts/reweight_masks.py` (e.g. `--background 0.5
+  --head-weight 0.3`; keep the head below the background). It writes new
+  masks and a manifest next to the old ones.
 - **Check by eye** `preview/<name>.jpg`: raw vs pasted members, the heavy-thin
   difference (should be body only) and the face close-ups. In `report.csv`,
   `head_pasted` False means the edit's own head was kept (the final line
@@ -207,8 +214,20 @@ What to edit (all commented in the file):
 - `slider_tuples`: your `train.jsonl`.
 - `level_norm`: `none` for `+1/-1` levels (strength 1 = the edit),
   `median_span` for measured levels (strength 1 = a typical tuple's range).
-- `anchor_prompts`: things the slider must leave alone (scenes without
-  people by default; add e.g. faces or clothing prompts if they drift).
+- **Anchors**, things the slider must leave alone at any strength up to
+  `anchor_max_multiplier`:
+  - `anchor_images`: a folder of photos, each with its own caption next to it
+    (`<name>.txt` or `.json`, field `anchor_caption_key`). Each anchor is noised
+    from its photo and conditioned on its caption. For a women-only slider,
+    use photos of men in the same kinds of scenes as the training data
+    (`configs/experiments/weight_r5_women.yaml`). A folder without captions
+    keeps the older behavior (its images noised for `anchor_prompts`).
+  - `anchor_prompts`: prompts without images, noised from the training image
+    of the step. Weak: the image and the prompt don't match. Prefer
+    captioned images.
+- `symmetry_strength` (see NOTES.md, "Run 3 results"): removes the part of
+  the LoRA's effect that is the same at +m and −m, the drift both directions
+  share. Costs ~5 s on the steps where it runs (`symmetry_prob`).
 - `turbo_preview`: your Turbo checkpoint (remove the key to preview on Raw).
 - `sample.prompts`: held-out captions with `--m -1`, `--m 0`, `--m 1`
   (same seed, `walk_seed: false`, so only the strength differs).
@@ -354,10 +373,14 @@ linearity and side effects:
 | `backward_per_member` | false | one backward per member (less memory, slower) |
 | `debug_dump_steps` | 0 | write member sheets for the first N steps |
 | `anchor_strength` | 0 (off) | weight of the anchor loss |
-| `anchor_prompts` | [] | prompts whose predictions the LoRA must not change |
+| `anchor_prompts` | [] | prompts whose predictions the LoRA must not change (noised from the batch) |
 | `anchor_prob` | 1.0 | chance per step to add the anchor loss |
 | `anchor_max_multiplier` | 1.0 | anchor strengths drawn from ±this |
-| `anchor_images` | none | folder of images to noise for anchors (default: the batch latents) |
+| `anchor_images` | none | folder of anchor photos: all captioned = paired anchors (photo + its caption); none captioned = noised for `anchor_prompts` |
+| `anchor_caption_key` | `caption_long` | field read from `.json` anchor captions |
+| `symmetry_strength` | 0 (off) | weight of mean(((v(+s) + v(−s)) / 2 − v(0))²) on the training batch |
+| `symmetry_prob` | 1.0 | chance per step (4 extra forwards, ~5 s on a 5090) |
+| `symmetry_max_multiplier` | 2.0 | s drawn from [0, this] |
 | `turbo_preview` | none | Turbo `.safetensors` for training samples |
 | `turbo_preview_steps` / `_cfg` / `_mu` | 8 / 1.0 / 1.15 | Turbo sampling |
 | `turbo_preview_offload` | true | move Raw to the CPU while previewing |
@@ -374,6 +397,7 @@ Dataset entries take `slider_tuples: <manifest>` with
 | `scripts/make_tuple_masks.py` | one loss mask per tuple for an existing manifest (§2b) |
 | `scripts/pairs_to_manifest.py` | before/after folders → `tuples.jsonl` (§2b) |
 | `scripts/split_holdout.py` | train / held-out manifests (§2c) |
+| `scripts/reweight_masks.py` | change background / head / body weights of existing masks (§2a) |
 | `scripts/measure_tuples.py` | body-width measure of every member; measured levels (§2d) |
 | `scripts/measure_images.py` | measure a folder of frames; pick evenly spaced intermediates per tuple (§2e) |
 | `scripts/slider_sweep.py` | linearity and side-effect sweep on Turbo (§4) |
@@ -422,7 +446,9 @@ ln -s /home/csprunger/ai-toolkit/extensions/slider_tuple/comfyui \
 | `SliderTupleTrainer.py` | the trainer (`type: slider_tuple_trainer`), subclass of SDTrainer |
 | `manifest.py`, `tuples.py` | manifest parsing; `slider:` config and dataset wiring |
 | `centering.py`, `loss.py` | centered multipliers, member weights, the tuple loss |
-| `members.py`, `anchors.py` | member images / masks / latent cache; anchor loss |
+| `members.py`, `anchors.py` | member images / masks / latent cache; anchor pool and loss |
+| `symmetry.py` | symmetry loss (only the odd part of the LoRA's effect may change predictions) |
+| `captions.py` | caption files next to images (`.txt` / `.json`) |
 | `scales.py` | F1: per-image scales for polarity datasets |
 | `turbo.py` | Turbo previews and ComfyUI checkpoint loading |
 | `paste_back.py`, `tuple_masks.py` | paste-back and mask building |
