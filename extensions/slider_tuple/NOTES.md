@@ -715,3 +715,22 @@ Data coverage, for the "more data" question: all 17 training tuples are women;
 11 swimsuit / bikini, 6 seen from behind, 3 mirror selfies. 4 tuples have edit
 spans within ~1.5x the measure's noise. The data is kept fixed for 3a / 3b so
 the comparison stays clean; more data comes after.
+
+### ComfyUI edit-strength node (2026-10-20)
+
+`comfyui/nodes.py`, linked as `ComfyUI/custom_nodes/ComfyUI-SliderMeasure`, for
+judging thinning edits while making them. It loads `body_measure.py`,
+`tuple_masks.py` and `toolkit/models/sapiens2.py` by file path, with a
+temporary `toolkit` / `toolkit.paths` / `toolkit.models.sapiens2` stub only
+while they import (removed again; tested), so nothing is installed into
+ComfyUI's venv (torch 2.12 there, 2.13 here; both work). Checked in ComfyUI's
+Python on tuple `7efab214...`: 1.064 -> 0.855 (-19.6%), the same as
+`measure_tuples.py`; 14 s including model load.
+
+DensePose instead of Sapiens2 (asked): possible but not a drop-in. Its masks
+are coarse (per-box ~112 px part maps, upsampled), while the edits change
+widths by 2-20%. Detectron2 builds are fragile. Changing the matte would also
+change every score, so old and new measurements stop being comparable. Its
+one real advantage is body-part labels (torso vs arms). If arms beside the
+torso turn out to add noise, keypoints (elbows / wrists) or a part
+segmentation could exclude them inside the current measure.

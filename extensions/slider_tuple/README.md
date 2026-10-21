@@ -360,6 +360,30 @@ templates;
 `configs/experiments/` holds run-specific A/B configs (each header says what it
 changes and why); `configs/dev/` holds the milestone smoke and acceptance configs (NOTES.md).
 
+### ComfyUI nodes (checking edits while making them)
+
+`comfyui/` is a ComfyUI node pack running the same body-width measure, so you
+can judge an edit inside the editing workflow and redo weak ones right away:
+
+```bash
+ln -s /home/csprunger/ai-toolkit/extensions/slider_tuple/comfyui \
+    /home/csprunger/ComfyUI/custom_nodes/ComfyUI-SliderMeasure   # then restart ComfyUI
+```
+
+- **Slider Edit Strength (body width):** reference (the pass-through edit, or
+  the original) + edited image(s) → `change` (edit − reference; negative =
+  thinner), `relative_change`, `ok`, a `verdict` per pair (`OK`, `TOO WEAK`,
+  `WRONG DIRECTION`, `UNMEASURABLE`), and a side-by-side preview with the
+  measured band. `ok` needs the chosen `direction` by at least `min_change`
+  (default 0.08; per-image noise ~0.03, the first weight data's median edit was
+  0.11). One reference can serve a whole batch of edits.
+- **Body Width Score (slider_tuple):** the score of each image, plus a preview.
+- Scores are identical to `measure_tuples.py` (checked on a real pair). The
+  pack loads `body_measure.py` and the Sapiens2 code from this checkout by file
+  path (no packages installed into ComfyUI) and reuses
+  `models/sapiens2/sapiens2_1b_matting.safetensors`. `keep_models_loaded`
+  holds the ~3 GB of measure models between runs.
+
 ### Code layout
 
 | File | Role |
@@ -373,6 +397,7 @@ changes and why); `configs/dev/` holds the milestone smoke and acceptance config
 | `paste_back.py`, `tuple_masks.py` | paste-back and mask building |
 | `sweep.py` | sweep metrics and summaries |
 | `body_measure.py` | body width in torso lengths (`--measure body`) |
+| `comfyui/` | ComfyUI nodes for the body-width measure (edit strength check) |
 
 ### Known issues
 
