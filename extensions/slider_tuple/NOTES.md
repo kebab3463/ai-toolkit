@@ -835,3 +835,34 @@ each person independently in couple photos. Built while run 4 trains:
 - **Not yet built:** per-person measurement for couple photos (the measure
   takes the most confident detection). Needed for the couple test once the
   single-person results look right.
+
+### Run 4 results: the symmetry loss at strength 10 is a brake (2026-10-21)
+
+`compare_sweeps.py --parity`, body-width odd / even part and bg LPIPS at +m / -m:
+
+| checkpoint | \|m\|=1 odd / even | \|m\|=2 odd / even, bg | \|m\|=3 odd / even, bg |
+| --- | --- | --- | --- |
+| 3b @500 | +0.025 / -0.003 | +0.093 / +0.025, 0.14 | +0.171 / +0.106, 0.22 |
+| 3b @1000 | +0.089 / +0.103 | +0.199 / +0.309, 0.38 | +0.384 / +0.558, 0.51 |
+| r4 @500 | +0.007 / +0.001 | +0.012 / -0.005, 0.04 | +0.013 / -0.007, 0.06 |
+| r4 @750 | +0.006 / +0.003 | +0.017 / -0.001, 0.06 | +0.027 / +0.001, 0.09 |
+| r4 @1000 | +0.002 / -0.000 | -0.001 / +0.000, 0.06 | +0.001 / +0.009, 0.10 |
+
+- **The even part is gone** (|even| <= 0.01 at every checkpoint and strength),
+  and drift stays low (bg LPIPS <= 0.10 at ±3 vs 0.51 for 3b). Contact
+  sheets: images stable at every strength, no ballooning, no distortion.
+- **The slider is gone too:** the odd part peaks at 0.027 (|m| = 3, step 750)
+  vs 0.171 for 3b @500, and is ~0 at step 1000. The images barely change
+  with m.
+- Logged `slider/symmetry_loss` ~1e-4 (x10 = 1e-3 weighted), small next to the
+  total loss (~0.28) but not next to the slider's signal, and Adam scales by
+  each parameter's gradient size, not the loss.
+- **Why it brakes the slider too:** for a LoRA, v(s) = F(W + s dW), the odd
+  part grows with dW and the even part with dW^2 (network curvature). With s
+  up to 3 the penalty weighs that curvature 9x (mse 81x) at strengths far
+  beyond the trained multipliers (<= ±0.94), so the cheapest way to satisfy
+  it is a small dW: the loss acts as a LoRA-size penalty. Strength 10 and
+  max multiplier 3 were too aggressive.
+- Next candidates: mild symmetry (strength ~1, max multiplier ~1.5, only
+  the strengths actually used), or none, with 3b @500 as the working point.
+  Learning the direction is limited by the data's weak signal either way.
