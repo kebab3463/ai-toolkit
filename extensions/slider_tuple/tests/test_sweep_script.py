@@ -133,3 +133,41 @@ def test_resummarize_reuses_csv_and_args(tmp_path):
         again = json.load(f)
     assert again["args"]["measure"] == summary["args"]["measure"] and again["per_m"]
     assert (out / "summary.txt").read_text().startswith("positive range:")
+
+
+def test_several_loras_go_to_their_own_folders_and_compare(tmp_path, capsys):
+    script = load_script()
+    out = tmp_path / "steps"
+    prompts = tmp_path / "prompts.txt"
+    prompts.write_text("a person in a park\n")
+    loras = ["run_000000250.safetensors", "run.safetensors"]
+    for lora, slope in zip(loras, (10, 40)):  # pre-rendered: no model loads
+        folder = os.path.join(str(out), os.path.splitext(lora)[0])
+        for seed in (1, 2):
+            for m in [0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, -0.5, -1.0]:
+                path = script.image_path(folder, 0, seed, m)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                Image.new("RGB", (32, 32), (int(100 + slope * m), 80, 80)).save(path)
+    old = sys.argv
+    sys.argv = ["slider_sweep.py", "--lora", *loras, "--prompts", str(prompts), "--seeds", "1,2",
+                "--measure", f"{__name__}:mean_red", "--no-lpips", "--out", str(out)]
+    try:
+        script.main()
+    finally:
+        sys.argv = old
+    for lora, slope in zip(loras, (10, 40)):
+        with open(out / os.path.splitext(lora)[0] / "summary.json") as f:
+            assert json.load(f)["positive"]["slope"] == pytest.approx(slope, abs=0.5)
+
+    spec = importlib.util.spec_from_file_location("compare_sweeps", os.path.join(os.path.dirname(SCRIPT), "compare_sweeps.py"))
+    compare = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(compare)
+    folders = [str(out / "run"), str(out / "run_000000250")]
+    assert [os.path.basename(f) for f in compare.order(folders)] == ["run_000000250", "run"]  # final save last
+    assert compare.order(["b_v1", "a_v2"]) == ["b_v1", "a_v2"]
+    capsys.readouterr()
+    data = compare.main(folders + ["--csv", str(tmp_path / "cmp.csv")])
+    assert data["run"][1.0]["delta"] == pytest.approx(40) and data["run_000000250"][1.0]["delta"] == pytest.approx(10)
+    printed = capsys.readouterr().out
+    assert "+40.000 (1.00)" in printed and "ref" in printed
+    assert len((tmp_path / "cmp.csv").read_text().splitlines()) == 1 + 2 * 9

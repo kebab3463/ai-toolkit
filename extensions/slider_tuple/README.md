@@ -221,6 +221,17 @@ linearity and side effects:
   slope / R² mixes in thresholds and breakdowns at large m.
 - `--resummarize` rewrites the summary and sheets from `sweep.csv` without
   loading models (e.g. after a tooling update).
+- **Compare runs:** sweep each run with the same prompts, seeds and
+  multipliers, then
+  `scripts/compare_sweeps.py output/sweeps/run_a output/sweeps/run_b` prints
+  the per-multiplier tables side by side (`--csv` for a file).
+- **Is it still learning?** Several LoRAs render with one model load, each
+  into `<out>/<file stem>/`: sweep a run's step checkpoints with
+  `--lora output/<run>/<run>_*.safetensors --out output/sweeps/<run>_steps`,
+  then `compare_sweeps.py output/sweeps/<run>_steps/* output/sweeps/<run>`
+  (step folders sort by step, a folder without a step number goes last). If
+  `delta` still grows from step to step at the same m, train longer or with a
+  higher lr. If it stopped growing, more of the same won't help.
 - **Side effects, built in:** `lpips_bg` (change outside the people) and
   `face_lpips` (change on the head crop), each against the same prompt and
   seed at strength 0. Flags in `summary.txt` mark side effects worse at -1
@@ -302,6 +313,7 @@ Dataset entries take `slider_tuples: <manifest>` with
 | `scripts/split_holdout.py` | train / held-out manifests (§2c) |
 | `scripts/measure_tuples.py` | body-width measure of every member; measured levels (§2d) |
 | `scripts/slider_sweep.py` | linearity and side-effect sweep on Turbo (§4) |
+| `scripts/compare_sweeps.py` | per-multiplier tables of several sweeps side by side (§4) |
 | `scripts/image_lpips.py` | LPIPS between images |
 | `scripts/dev/compare_runs.py` | two configs, same seed, short runs: loss / speed / memory A/B |
 | `scripts/dev/make_smoke_pairs.py` | synthetic pairs for plumbing tests (not training data) |

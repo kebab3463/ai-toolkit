@@ -624,3 +624,31 @@ steps / lr may look weaker per unit m; if so, raise steps or lr, since the
 direction is unchanged. Tuple influence grows with s^2, so the 3-4 weak-edit
 tuples (span 0.03-0.04, comparable to the measure's ±0.03 noise) contribute
 little.
+
+### Run 2 results: Turbo sweep (2026-10-20)
+
+`compare_sweeps.py output/sweeps/weight_v1_turbo output/sweeps/weight_v2_turbo`
+(delta = body-width change vs m = 0, right_sign in parentheses, bg / face LPIPS):
+
+| m | run 1 (±1 levels) | run 2 (measured, median_span) |
+| --- | --- | --- |
+| -3 | +0.088 (0.00) 0.47/0.47 | -0.055 (1.00) 0.18/0.18 |
+| -2 | +0.035 (0.33) 0.27/0.34 | -0.045 (0.83) 0.12/0.12 |
+| -1 | -0.011 (0.50) 0.11/0.16 | -0.015 (0.83) 0.05/0.06 |
+| +1 | +0.014 (0.67) 0.10/0.16 | +0.006 (1.00) 0.05/0.07 |
+| +2 | +0.187 (1.00) 0.28/0.30 | +0.025 (0.83) 0.13/0.17 |
+| +3 | +0.459 (1.00) 0.46/0.48 | +0.056 (0.83) 0.18/0.22 |
+
+- **Direction fixed, in both signs:** the right sign at every strength
+  (0.83-1.0, including +0.5 / -0.5), monotone on the negative side, and the
+  per-image spread is small (delta_sd 0.004-0.04). Run 1 had no thinner side
+  and ~50% right sign at |m| <= 1. Contact sheets: slight thinning at -3,
+  slight widening at +3, images otherwise stable.
+- **Side effects halved:** bg / face LPIPS 0.05 / 0.06-0.07 at m = ±1
+  (run 1: 0.10-0.11 / 0.16), 0.18 / 0.18-0.22 at ±3 (run 1: 0.47).
+- **Far too weak:** fully learned, m = 1 would change the score by one median
+  span (0.114). At -1 it changes by 0.015 (~13%), at -3 by 0.055 (~16% of
+  3 spans). As expected from training at about half run 1's multipliers, so
+  the LoRA needs to grow several times larger: more steps or a higher lr, not
+  a different design. Next: checkpoint sweep (does delta still grow from
+  step 250 to 1000?), then run 3 with more training.

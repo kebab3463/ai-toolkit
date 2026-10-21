@@ -23,6 +23,9 @@ Usage (from the repo root):
         --prompts held_out_prompts.txt --measure mymetrics:body_score --out output/sweeps/run
     # acceptance check: same LoRA with every delta zeroed -> slope ~0, LPIPS ~0, face sim ~1
     ... --zero-lora --out output/sweeps/run_zero
+    # every checkpoint of a run, one model load, then a side-by-side table
+    ... --lora output/run/*.safetensors --out output/sweeps/run_steps
+    .venv/bin/python extensions/slider_tuple/scripts/compare_sweeps.py output/sweeps/run_steps/*
 """
 
 import argparse
@@ -61,7 +64,9 @@ def parse_args():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--model", default="krea/Krea-2-Turbo",
                    help="Krea 2 checkpoint: hub id, folder, .safetensors, or a ComfyUI int8_convrot .safetensors")
-    p.add_argument("--lora", help="trained slider LoRA (.safetensors); omit to sweep the base model only")
+    p.add_argument("--lora", nargs="+", help="trained slider LoRA (.safetensors); several (e.g. a run's step "
+                                            "checkpoints) render with one model load into <out>/<file stem>/; "
+                                            "omit to sweep the base model only")
     p.add_argument("--zero-lora", action="store_true", help="zero every LoRA delta after loading (acceptance check)")
     p.add_argument("--prompts", required=True, help="text file, one prompt per line, or a tuples.jsonl (captions)")
     p.add_argument("--seeds", default="1000,1001,1002")
@@ -109,8 +114,16 @@ def image_path(out, prompt_idx, seed, m):
     return os.path.join(out, "images", f"p{prompt_idx:03d}_s{seed}_m{m:+.2f}.png")
 
 
-def render(args, prompts, seeds, multipliers):
-    """Render every missing image; returns rows with paths."""
+def sweep_jobs(args):
+    """[(lora path or None, output folder)]: several LoRAs go to <out>/<LoRA file stem>/."""
+    loras = args.lora or [None]
+    if len(loras) == 1:
+        return [(loras[0], args.out)]
+    return [(path, os.path.join(args.out, os.path.splitext(os.path.basename(path))[0])) for path in loras]
+
+
+def render(args, prompts, seeds, multipliers, jobs=None):
+    """Render every missing image, loading the model once for all jobs; returns {output folder: rows}."""
     import torch
 
     from extensions.slider_tuple.turbo import is_comfy_quantized, load_krea2_dit
@@ -118,11 +131,13 @@ def render(args, prompts, seeds, multipliers):
     from toolkit.inference_lora import InferenceLoRA
     from toolkit.util.get_model import get_model_class
 
-    rows = [SweepRow(prompt_idx=i, prompt=p, seed=s, m=m, path=image_path(args.out, i, s, m))
-            for i, p in enumerate(prompts) for s in seeds for m in multipliers]
-    todo = [r for r in rows if not os.path.exists(r.path)]
-    print(f"{len(rows)} images, {len(rows) - len(todo)} already rendered")
-    if not todo:
+    jobs = jobs or sweep_jobs(args)
+    rows = {out: [SweepRow(prompt_idx=i, prompt=p, seed=s, m=m, path=image_path(out, i, s, m))
+                  for i, p in enumerate(prompts) for s in seeds for m in multipliers] for _, out in jobs}
+    todo = {out: [r for r in rows[out] if not os.path.exists(r.path)] for _, out in jobs}
+    for _, out in jobs:
+        print(f"{out}: {len(rows[out])} images, {len(rows[out]) - len(todo[out])} already rendered")
+    if not any(todo.values()):
         return rows
 
     model_kwargs = {} if args.mu is None else {"schedule_mu": args.mu}
@@ -139,35 +154,53 @@ def render(args, prompts, seeds, multipliers):
         sd._load_transformer = lambda: load_krea2_dit(args.model, sd.torch_dtype)
     sd.load_model()
 
-    lora = None
-    if args.lora:
-        lora = InferenceLoRA(args.lora).load(sd, status_fn=print)
-        print(lora.report_line())
-        if not lora.entries:
-            raise SystemExit(f"no LoRA modules matched in {args.lora}")
-        if args.zero_lora:
-            for e in lora.entries:
-                for name in ("A", "B", "diff", "diff_b"):
-                    t = getattr(e, name)
-                    if t is not None:
-                        t.zero_()
-        lora.attach()
-
-    os.makedirs(os.path.join(args.out, "images"), exist_ok=True)
-    with torch.no_grad():
-        for n, r in enumerate(todo, 1):
+    for lora_path, out in jobs:
+        if not todo[out]:
+            continue
+        lora = None
+        if lora_path:
+            lora = InferenceLoRA(lora_path).load(sd, status_fn=print)
+            print(lora.report_line())
+            if not lora.entries:
+                raise SystemExit(f"no LoRA modules matched in {lora_path}")
+            if args.zero_lora:
+                for e in lora.entries:
+                    for name in ("A", "B", "diff", "diff_b"):
+                        t = getattr(e, name)
+                        if t is not None:
+                            t.zero_()
+            lora.attach()
+        os.makedirs(os.path.join(out, "images"), exist_ok=True)
+        try:
+            with torch.no_grad():
+                for n, r in enumerate(todo[out], 1):
+                    if lora is not None:
+                        lora.strength = r.m
+                    print(f"[{n}/{len(todo[out])}] {os.path.basename(out)} prompt {r.prompt_idx} seed {r.seed} "
+                          f"m {r.m:+g}", flush=True)
+                    sd.generate_images([GenerateImageConfig(
+                        prompt=r.prompt, width=args.width, height=args.height, num_inference_steps=args.steps,
+                        guidance_scale=args.cfg, seed=r.seed, output_path=r.path,
+                    )], sampler="flowmatch")
+        finally:
             if lora is not None:
-                lora.strength = r.m
-            print(f"[{n}/{len(todo)}] prompt {r.prompt_idx} seed {r.seed} m {r.m:+g}", flush=True)
-            sd.generate_images([GenerateImageConfig(
-                prompt=r.prompt, width=args.width, height=args.height, num_inference_steps=args.steps,
-                guidance_scale=args.cfg, seed=r.seed, output_path=r.path,
-            )], sampler="flowmatch")
-    if lora is not None:
-        lora.detach()
+                lora.detach()
     del sd
     torch.cuda.empty_cache()
     return rows
+
+
+def load_measure_models(args):
+    """(lpips_fn, matte_fn, keypoints_fn) for measure(), loaded once; None entries where not needed."""
+    if args.no_lpips and args.measure != "body":
+        return None, None, None
+    from extensions.slider_tuple.tuple_masks import load_mask_models
+    lpips_fn = None
+    if not args.no_lpips:
+        import lpips
+        net = lpips.LPIPS(net="alex", spatial=True, verbose=False).to(args.device).eval()
+        lpips_fn = lambda a, b: net(a.to(args.device), b.to(args.device))
+    return (lpips_fn, *load_mask_models(args.device))
 
 
 def measure(args, rows, models=None):
@@ -190,16 +223,7 @@ def measure(args, rows, models=None):
     if len(refs) != len({(r.prompt_idx, r.seed) for r in rows}):
         raise SystemExit("every prompt/seed needs an m=0 render as the side-effect reference")
 
-    lpips_fn = matte_fn = keypoints_fn = None
-    if models is not None:
-        lpips_fn, matte_fn, keypoints_fn = models
-    elif not args.no_lpips or body:
-        from extensions.slider_tuple.tuple_masks import load_mask_models
-        if not args.no_lpips:
-            import lpips
-            net = lpips.LPIPS(net="alex", spatial=True, verbose=False).to(args.device).eval()
-            lpips_fn = lambda a, b: net(a.to(args.device), b.to(args.device))
-        matte_fn, keypoints_fn = load_mask_models(args.device)
+    lpips_fn, matte_fn, keypoints_fn = models if models is not None else load_measure_models(args)
 
     size = (args.lpips_res, args.lpips_res)
     to_tensor = lambda img: torch.from_numpy(np.asarray(img, dtype=np.float32) / 127.5 - 1).permute(2, 0, 1)[None]
@@ -246,6 +270,25 @@ def measure(args, rows, models=None):
     return rows
 
 
+def write_outputs(args, out, rows, n_prompts):
+    """Contact sheets, summary.json (keeping the render arguments on --resummarize) and summary.txt."""
+    for i in range(n_prompts):
+        contact_sheet([r for r in rows if r.prompt_idx == i], os.path.join(out, "sheets", f"prompt_{i:03d}.png"))
+    summary = summarize(rows, margin=args.margin)
+    summary_path = os.path.join(out, "summary.json")
+    run_args = dict(vars(args), out=out)
+    if args.resummarize and os.path.exists(summary_path):  # keep the arguments the images were rendered with
+        with open(summary_path) as f:
+            run_args = json.load(f).get("args", run_args)
+    with open(summary_path, "w") as f:
+        json.dump({"args": run_args, "positive": summary.positive, "diagnostic": summary.diagnostic,
+                   "flags": summary.flags, "per_m": summary.per_m}, f, indent=2)
+    text = "\n".join(summary.lines())
+    with open(os.path.join(out, "summary.txt"), "w") as f:
+        f.write(text + "\n")
+    return text
+
+
 def main():
     args = parse_args()
     prompts = read_prompts(args.prompts)
@@ -256,28 +299,21 @@ def main():
     if not args.lora:
         multipliers = [0.0]
 
+    jobs = sweep_jobs(args)
     if args.resummarize:
-        rows = read_csv(os.path.join(args.out, "sweep.csv"))
+        rows = {out: read_csv(os.path.join(out, "sweep.csv")) for _, out in jobs}
     else:
-        rows = render(args, prompts, seeds, multipliers)
-        rows = measure(args, rows)
-        write_csv(rows, os.path.join(args.out, "sweep.csv"))
-    for i in range(len(prompts)):
-        contact_sheet([r for r in rows if r.prompt_idx == i], os.path.join(args.out, "sheets", f"prompt_{i:03d}.png"))
-
-    summary = summarize(rows, margin=args.margin)
-    summary_path = os.path.join(args.out, "summary.json")
-    run_args = vars(args)
-    if args.resummarize and os.path.exists(summary_path):  # keep the arguments the images were rendered with
-        with open(summary_path) as f:
-            run_args = json.load(f).get("args", run_args)
-    with open(summary_path, "w") as f:
-        json.dump({"args": run_args, "positive": summary.positive, "diagnostic": summary.diagnostic,
-                   "flags": summary.flags, "per_m": summary.per_m}, f, indent=2)
-    text = "\n".join(summary.lines())
-    with open(os.path.join(args.out, "summary.txt"), "w") as f:
-        f.write(text + "\n")
-    print(text)
+        rows = render(args, prompts, seeds, multipliers, jobs)
+        models = load_measure_models(args)
+        for _, out in jobs:
+            measure(args, rows[out], models=models)
+            write_csv(rows[out], os.path.join(out, "sweep.csv"))
+    for _, out in jobs:
+        text = write_outputs(args, out, rows[out], len(prompts))
+        print(f"== {out}\n{text}" if len(jobs) > 1 else text)
+    if len(jobs) > 1:
+        print(f"compare: .venv/bin/python extensions/slider_tuple/scripts/compare_sweeps.py "
+              + " ".join(out for _, out in jobs))
 
 
 if __name__ == "__main__":
