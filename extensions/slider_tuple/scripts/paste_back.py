@@ -44,6 +44,7 @@ from PIL import Image, ImageDraw  # noqa: E402
 from extensions.slider_tuple.paste_back import (  # noqa: E402
     bbox, feather, max_shift, paste_member, register_member, resample,
 )
+from extensions.slider_tuple import captions  # noqa: E402
 from extensions.slider_tuple.tuple_masks import compose, head_ellipse, load_mask_models, to_png_array, union  # noqa: E402
 
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp")
@@ -87,18 +88,10 @@ def find(folder, stem):
 
 
 def read_caption(folder, stem, key="caption_long"):
-    """<folder>/<stem>.txt, else the ``key`` string of <folder>/<stem>.json; None if neither exists."""
-    txt, js = os.path.join(folder, stem + ".txt"), os.path.join(folder, stem + ".json")
-    if os.path.exists(txt):
-        with open(txt, encoding="utf-8") as f:
-            return f.read().strip() or None
-    if os.path.exists(js):
-        with open(js, encoding="utf-8") as f:
-            data = json.load(f)
-        if not isinstance(data.get(key), str):
-            raise SystemExit(f"{js}: no string field {key!r} (fields: {sorted(data)}); see --caption-key")
-        return data[key].strip() or None
-    return None
+    try:
+        return captions.read_caption(folder, stem, key)
+    except ValueError as e:
+        raise SystemExit(f"{e}; see --caption-key")
 
 
 def head_mask_for(keypoints_fn, image, size, margin, min_score):

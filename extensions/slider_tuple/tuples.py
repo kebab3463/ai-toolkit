@@ -21,7 +21,10 @@ Process-level options live in a ``slider:`` block (centering.py has the math):
       anchor_prompts: []           # prompts the slider must leave unchanged
       anchor_prob: 1.0             # chance per step of adding the anchor loss
       anchor_max_multiplier: 1.0   # LoRA multiplier drawn from [-max, max]
-      anchor_images: null          # folder of anchor images; default: the batch's latents
+      anchor_images: null          # folder of anchor images. Each with a caption next to it
+                                   # (<name>.txt / .json): paired anchors, image + its caption.
+                                   # None captioned: noised for the anchor_prompts at random.
+      anchor_caption_key: caption_long  # field read from .json captions
       # symmetry loss (symmetry.py); off while symmetry_strength is 0
       symmetry_strength: 0.0       # weight of mean(((v(+s) + v(-s)) / 2 - v(0))^2) on the training batch
       symmetry_prob: 1.0           # chance per step of adding it (4 extra forwards)
@@ -46,7 +49,7 @@ from .manifest import SliderTuple, load_manifest
 SLIDER_TRAIN_KEYS = {
     "members_per_step", "level_norm", "min_span", "weight_cap_pct", "backward_per_member", "center_offset",
     "debug_dump_steps",
-    "anchor_strength", "anchor_prompts", "anchor_prob", "anchor_max_multiplier", "anchor_images",
+    "anchor_strength", "anchor_prompts", "anchor_prob", "anchor_max_multiplier", "anchor_images", "anchor_caption_key",
     "symmetry_strength", "symmetry_prob", "symmetry_max_multiplier",
     "turbo_preview", "turbo_preview_steps", "turbo_preview_cfg", "turbo_preview_mu", "turbo_preview_offload",
 }
@@ -66,6 +69,7 @@ class SliderTrainConfig:
     anchor_prob: float = 1.0
     anchor_max_multiplier: float = 1.0
     anchor_images: Optional[str] = None
+    anchor_caption_key: str = "caption_long"
     symmetry_strength: float = 0.0
     symmetry_prob: float = 1.0
     symmetry_max_multiplier: float = 2.0
@@ -111,6 +115,7 @@ class SliderTrainConfig:
             anchor_prob=number("anchor_prob", 1.0),
             anchor_max_multiplier=number("anchor_max_multiplier", 1.0),
             anchor_images=raw.get("anchor_images"),
+            anchor_caption_key=str(raw.get("anchor_caption_key", "caption_long")),
             symmetry_strength=number("symmetry_strength", 0.0),
             symmetry_prob=number("symmetry_prob", 1.0),
             symmetry_max_multiplier=number("symmetry_max_multiplier", 2.0),
@@ -146,8 +151,8 @@ class SliderTrainConfig:
             raise ValueError("slider.turbo_preview must be a .safetensors checkpoint path")
         if config.turbo_preview_steps < 1:
             raise ValueError("slider.turbo_preview_steps must be >= 1")
-        if config.anchors_enabled and not config.anchor_prompts:
-            raise ValueError("slider.anchor_strength > 0 needs anchor_prompts")
+        if config.anchors_enabled and not (config.anchor_prompts or config.anchor_images):
+            raise ValueError("slider.anchor_strength > 0 needs anchor_prompts or anchor_images")
         return config
 
 

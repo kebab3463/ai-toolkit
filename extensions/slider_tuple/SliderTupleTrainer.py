@@ -11,7 +11,7 @@ from toolkit.print import print_acc
 from toolkit.prompt_utils import PromptEmbeds
 from toolkit.train_tools import get_torch_dtype
 
-from .anchors import anchor_loss, center_crop_geometry, list_anchor_images
+from .anchors import AnchorPool, anchor_loss, center_crop_geometry, load_anchor_pool
 from .loss import slider_tuple_loss
 from .manifest import SliderTuple
 from .members import MemberLatentCache, dump_tuple, load_member_image, load_member_mask
@@ -47,8 +47,6 @@ class SliderTupleTrainer(DiffusionTrainer):
         )
         self.init_slider_state(SliderTrainConfig.from_raw(self.get_conf("slider", None)))
         self.setup_tuple_datasets()
-        if self.slider_config.anchors_enabled and self.slider_config.anchor_images:
-            self.slider_anchor_images = list_anchor_images(self.slider_config.anchor_images)
 
     def init_slider_state(self, slider_config: SliderTrainConfig):
         self.slider_config = slider_config
@@ -56,8 +54,11 @@ class SliderTupleTrainer(DiffusionTrainer):
         self.slider_plans: Dict[str, TuplePlan] = {}
         self.slider_kappa = 1.0
         self.slider_member_latents = MemberLatentCache()
-        self.slider_anchor_embeds = []
-        self.slider_anchor_images: List[str] = []
+        self.slider_anchor_embeds = []  # one PromptEmbeds per slider_anchor_pool item
+        self.slider_anchor_pool = AnchorPool(items=[], unpaired_images=[])
+        if slider_config.anchors_enabled:
+            self.slider_anchor_pool = load_anchor_pool(
+                slider_config.anchor_prompts, slider_config.anchor_images, slider_config.anchor_caption_key)
         self.slider_anchor_latents = MemberLatentCache()
         self.slider_turbo: Optional[TurboPreview] = None
         if slider_config.turbo_preview:
@@ -159,16 +160,18 @@ class SliderTupleTrainer(DiffusionTrainer):
         super().hook_before_train_loop()
 
     def encode_anchor_prompts(self):
+        """Encode every anchor text (prompts and anchor-image captions) while the text encoder is loaded."""
         if not self.slider_config.anchors_enabled:
             return
+        encoded = {}
         with torch.no_grad():
             self.sd.text_encoder_to(self.device_torch)
-            self.slider_anchor_embeds = [
-                self.encode_static_prompt(prompt).to(self.device_torch, dtype=self.sd.torch_dtype).detach()
-                for prompt in self.slider_config.anchor_prompts
-            ]
-        source = f"{len(self.slider_anchor_images)} anchor images" if self.slider_anchor_images else "the batch latents"
-        print_acc(f"slider_tuple: anchor loss on {len(self.slider_anchor_embeds)} prompts over {source}")
+            for item in self.slider_anchor_pool.items:
+                if item.text not in encoded:
+                    encoded[item.text] = self.encode_static_prompt(item.text).to(
+                        self.device_torch, dtype=self.sd.torch_dtype).detach()
+        self.slider_anchor_embeds = [encoded[item.text] for item in self.slider_anchor_pool.items]
+        print_acc(f"slider_tuple: anchor loss on {self.slider_anchor_pool.describe()}")
 
     def apply_slider_scales(self):
         for loader in (self.data_loader, self.data_loader_reg):
@@ -309,12 +312,13 @@ class SliderTupleTrainer(DiffusionTrainer):
     def add_anchor_loss(self, loss, batch, noise, timesteps, pred_kwargs):
         cfg = self.slider_config
         n = len(batch.file_items)
+        picks = [random.randrange(len(self.slider_anchor_pool.items)) for _ in range(n)]
         weighted, mse = anchor_loss(
             self.sd,
-            latents=self.anchor_latents(batch),
+            latents=self.anchor_latents(batch, picks),
             noise=noise,
             timesteps=timesteps,
-            anchor_embeds=[random.choice(self.slider_anchor_embeds) for _ in range(n)],
+            anchor_embeds=[self.slider_anchor_embeds[i] for i in picks],
             multipliers=[random.uniform(-cfg.anchor_max_multiplier, cfg.anchor_max_multiplier) for _ in range(n)],
             strength=cfg.anchor_strength,
             pred_kwargs=pred_kwargs,
@@ -325,25 +329,32 @@ class SliderTupleTrainer(DiffusionTrainer):
         total.requires_grad_(True)
         return total
 
-    def anchor_latents(self, batch) -> torch.Tensor:
-        """The batch's own latents, or a random anchor image per item, center-cropped
-        to that item's size (cached like member latents)."""
-        if not self.slider_anchor_images:
-            return batch.latents
+    def anchor_latents(self, batch, picks: List[int]) -> torch.Tensor:
+        """Per batch item: the picked anchor's own image (paired anchors), a random uncaptioned
+        anchor image (prompt anchors with anchor_images), or the item's own latents. Images are
+        center-cropped to the item's size and cached like member latents."""
+        pool = self.slider_anchor_pool
         dtype = get_torch_dtype(self.train_config.dtype)
+        paths = [pool.items[i].image or (random.choice(pool.unpaired_images) if pool.unpaired_images else None)
+                 for i in picks]
+        if all(p is None for p in paths):
+            return batch.latents
         requests = []
-        for item in batch.file_items:
-            path = random.choice(self.slider_anchor_images)
-            with Image.open(path) as img:
-                size = ImageOps.exif_transpose(img).size  # the loader applies EXIF rotation first
-            requests.append((path, center_crop_geometry(size, (item.crop_width, item.crop_height))))
+        for path, item in zip(paths, batch.file_items):
+            if path is not None:
+                with Image.open(path) as img:
+                    size = ImageOps.exif_transpose(img).size  # the loader applies EXIF rotation first
+                requests.append((path, center_crop_geometry(size, (item.crop_width, item.crop_height))))
 
         def encode(pixels):
             with torch.no_grad():
                 return self.sd.encode_images(pixels.to(self.device_torch, dtype=dtype))
 
-        latents = self.slider_anchor_latents.get(requests, encode)
-        return torch.stack([x.to(self.device_torch, dtype=dtype) for x in latents])
+        encoded = iter(self.slider_anchor_latents.get(requests, encode))
+        return torch.stack([
+            (next(encoded) if path is not None else batch.latents[k]).to(self.device_torch, dtype=dtype)
+            for k, path in enumerate(paths)
+        ])
 
     def gather_member_latents(self, tuples: List[SliderTuple], picks: List[List[int]], batch) -> List[torch.Tensor]:
         """(B, ...) latents per slot: the anchor's from the batch (upstream cached

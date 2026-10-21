@@ -1,12 +1,14 @@
 """M5 / F4: anchor preservation loss."""
 
+import os
+
 
 import numpy as np
 import pytest
 import torch
 from PIL import Image
 
-from extensions.slider_tuple.anchors import anchor_loss, center_crop_geometry, list_anchor_images
+from extensions.slider_tuple.anchors import anchor_loss, center_crop_geometry, list_anchor_images, load_anchor_pool
 from extensions.slider_tuple.members import load_member_tensor
 from extensions.slider_tuple.tuples import SliderTrainConfig
 
@@ -102,20 +104,59 @@ def test_trainer_adds_and_logs_anchor_loss(tmp_path):
     assert "slider/anchor_loss" not in never.additional_logs
 
 
-def test_anchor_images_replace_batch_latents(tmp_path):
-    scenes = tmp_path / "scenes"
-    scenes.mkdir()
-    for i in range(2):
-        Image.fromarray(np.random.default_rng(i).integers(0, 256, (120, 90, 3), dtype=np.uint8)).save(scenes / f"s{i}.png")
+def scene_folder(folder, n=2, captions=None):
+    folder.mkdir(parents=True, exist_ok=True)
+    for i in range(n):
+        Image.fromarray(np.random.default_rng(i).integers(0, 256, (120, 90, 3), dtype=np.uint8)).save(folder / f"s{i}.png")
+        if captions is not None and i < len(captions) and captions[i] is not None:
+            (folder / f"s{i}.txt").write_text(captions[i])
+    return str(folder)
+
+
+def test_uncaptioned_anchor_images_replace_batch_latents(tmp_path):
+    scenes = scene_folder(tmp_path / "scenes")
     trainer, batch = anchor_trainer(
-        tmp_path, {"anchor_strength": 1.0, "anchor_prompts": ["a forest"], "anchor_images": str(scenes)}
+        tmp_path, {"anchor_strength": 1.0, "anchor_prompts": ["a forest"], "anchor_images": scenes}
     )
-    trainer.slider_anchor_images = list_anchor_images(str(scenes))
-    latents = trainer.anchor_latents(batch)
+    assert trainer.slider_anchor_pool.unpaired_images and all(i.image is None for i in trainer.slider_anchor_pool.items)
+    latents = trainer.anchor_latents(batch, [0])
     assert latents.shape == batch.latents.shape
     assert not torch.allclose(latents, batch.latents)
     tuple_loss(trainer, batch)
     assert trainer.additional_logs["slider/anchor_loss"] > 0
+
+
+def test_paired_anchor_pool(tmp_path):
+    men = scene_folder(tmp_path / "men", captions=["a man at the beach", "a man in an office"])
+    pool = load_anchor_pool(["a forest"], men)
+    assert [(i.text, os.path.basename(i.image) if i.image else None) for i in pool.items] == [
+        ("a forest", None), ("a man at the beach", "s0.png"), ("a man in an office", "s1.png")]
+    assert pool.unpaired_images == [] and "2 captioned anchor images + 1 prompts" in pool.describe()
+    assert len(load_anchor_pool([], men).items) == 2  # captioned images alone are enough
+    with pytest.raises(ValueError, match="1 of 2 images have no caption"):
+        load_anchor_pool([], scene_folder(tmp_path / "half", captions=["only one"]))
+    with pytest.raises(ValueError, match="needs anchor_prompts"):
+        load_anchor_pool([], scene_folder(tmp_path / "bare"))
+    (tmp_path / "json").mkdir()
+    Image.new("RGB", (90, 120)).save(tmp_path / "json" / "a.png")
+    (tmp_path / "json" / "a.json").write_text('{"caption_long": "long", "caption_short": "short"}')
+    assert load_anchor_pool([], str(tmp_path / "json"), "caption_short").items[0].text == "short"
+
+
+def test_paired_anchors_use_their_own_image_and_caption(tmp_path):
+    men = scene_folder(tmp_path / "men", captions=["a man at the beach", "a man in an office"])
+    trainer, batch = anchor_trainer(tmp_path, {"anchor_strength": 1.0, "anchor_images": men})
+    trainer.slider_anchor_embeds = [make_embeds(1, seed=20), make_embeds(1, seed=21)]
+    first, second = trainer.anchor_latents(batch, [0]), trainer.anchor_latents(batch, [1])
+    assert not torch.allclose(first, second) and not torch.allclose(first, batch.latents)
+    assert torch.allclose(trainer.anchor_latents(batch, [0]), first)  # cached, same crop
+    tuple_loss(trainer, batch)
+    assert trainer.additional_logs["slider/anchor_loss"] > 0
+
+
+def test_prompt_anchors_without_images_use_batch_latents(tmp_path):
+    trainer, batch = anchor_trainer(tmp_path, {"anchor_strength": 1.0, "anchor_prompts": ["a forest", "a kitchen"]})
+    assert torch.equal(trainer.anchor_latents(batch, [1]), batch.latents)
 
 
 @pytest.mark.parametrize(
