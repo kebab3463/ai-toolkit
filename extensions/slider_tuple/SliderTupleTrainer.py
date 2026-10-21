@@ -5,7 +5,7 @@ from typing import Dict, List, Optional
 import torch
 from PIL import Image, ImageOps
 
-from extensions_built_in.sd_trainer.SDTrainer import SDTrainer
+from extensions_built_in.sd_trainer.DiffusionTrainer import DiffusionTrainer
 from toolkit.data_transfer_object.data_loader import DataLoaderBatchDTO
 from toolkit.print import print_acc
 from toolkit.prompt_utils import PromptEmbeds
@@ -16,6 +16,7 @@ from .loss import slider_tuple_loss
 from .manifest import SliderTuple
 from .members import MemberLatentCache, dump_tuple, load_member_image, load_member_mask
 from .centering import TuplePlan, centered_scales, plan_tuples, sample_members, weighted_scale_sum
+from .symmetry import symmetry_loss
 from .scales import SliderDatasetOptions, apply_slider_scales, slider_options_by_config
 from .tuples import SliderTrainConfig, load_tuple_dataset, write_anchor_dataset
 from .turbo import TurboPreview
@@ -24,10 +25,13 @@ from .turbo import TurboPreview
 SLIDER_GUIDANCE_TYPES = ("slider_tuple",)
 
 
-class SliderTupleTrainer(SDTrainer):
+class SliderTupleTrainer(DiffusionTrainer):
     """SDTrainer with tuple-based image slider losses.
 
-    Selected with ``type: slider_tuple_trainer`` in a job config. Datasets whose
+    Built on DiffusionTrainer (SDTrainer + the web UI's job status: progress,
+    stop, sample / save now), which is inert unless the run was started from
+    the UI (sqlite_db_path + AITK_JOB_ID). Selected with
+    ``type: slider_tuple_trainer`` in a job config. Datasets whose
     ``guidance_type`` is not one of ``SLIDER_GUIDANCE_TYPES`` (e.g. ``polarity``)
     train exactly as they would under ``sd_trainer``.
 
@@ -270,7 +274,28 @@ class SliderTupleTrainer(SDTrainer):
         self.log_losses_by_rank(picks, plans, member_losses)
         if cfg.anchors_enabled and random.random() < cfg.anchor_prob:
             loss = self.add_anchor_loss(loss, batch, noise, timesteps, pred_kwargs)
+        if cfg.symmetry_enabled and random.random() < cfg.symmetry_prob:
+            loss = self.add_symmetry_loss(loss, batch, noise, timesteps, conditional_embeds, pred_kwargs)
         return loss
+
+    def add_symmetry_loss(self, loss, batch, noise, timesteps, conditional_embeds, pred_kwargs):
+        """symmetry.py on the batch's own (anchor member) latents and caption."""
+        cfg = self.slider_config
+        weighted, mse = symmetry_loss(
+            self.sd,
+            latents=batch.latents,
+            noise=noise,
+            timesteps=timesteps,
+            embeds=conditional_embeds,
+            multipliers=[random.uniform(0.0, cfg.symmetry_max_multiplier) for _ in batch.file_items],
+            strength=cfg.symmetry_strength,
+            pred_kwargs=pred_kwargs,
+            batch=batch,
+        )
+        self.additional_logs["slider/symmetry_loss"] = mse
+        total = (loss.detach() + weighted).detach()
+        total.requires_grad_(True)
+        return total
 
     def log_losses_by_rank(self, picks, plans, member_losses):
         """Mean member MSE per rank in its tuple (rank 0 = highest level, normally the real photo)."""

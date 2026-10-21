@@ -22,6 +22,10 @@ Process-level options live in a ``slider:`` block (centering.py has the math):
       anchor_prob: 1.0             # chance per step of adding the anchor loss
       anchor_max_multiplier: 1.0   # LoRA multiplier drawn from [-max, max]
       anchor_images: null          # folder of anchor images; default: the batch's latents
+      # symmetry loss (symmetry.py); off while symmetry_strength is 0
+      symmetry_strength: 0.0       # weight of mean(((v(+s) + v(-s)) / 2 - v(0))^2) on the training batch
+      symmetry_prob: 1.0           # chance per step of adding it (4 extra forwards)
+      symmetry_max_multiplier: 2.0 # s drawn from [0, max]; cover the strengths you will use
       # Turbo previews (F7, turbo.py): sample with this Turbo DiT checkpoint instead of the Raw model
       turbo_preview: null          # e.g. a ComfyUI int8_convrot .safetensors
       turbo_preview_steps: 8
@@ -43,6 +47,7 @@ SLIDER_TRAIN_KEYS = {
     "members_per_step", "level_norm", "min_span", "weight_cap_pct", "backward_per_member", "center_offset",
     "debug_dump_steps",
     "anchor_strength", "anchor_prompts", "anchor_prob", "anchor_max_multiplier", "anchor_images",
+    "symmetry_strength", "symmetry_prob", "symmetry_max_multiplier",
     "turbo_preview", "turbo_preview_steps", "turbo_preview_cfg", "turbo_preview_mu", "turbo_preview_offload",
 }
 
@@ -61,11 +66,18 @@ class SliderTrainConfig:
     anchor_prob: float = 1.0
     anchor_max_multiplier: float = 1.0
     anchor_images: Optional[str] = None
+    symmetry_strength: float = 0.0
+    symmetry_prob: float = 1.0
+    symmetry_max_multiplier: float = 2.0
     turbo_preview: Optional[str] = None
     turbo_preview_steps: int = 8
     turbo_preview_cfg: float = 1.0
     turbo_preview_mu: float = 1.15
     turbo_preview_offload: bool = True
+
+    @property
+    def symmetry_enabled(self) -> bool:
+        return self.symmetry_strength > 0
 
     @property
     def anchors_enabled(self) -> bool:
@@ -99,6 +111,9 @@ class SliderTrainConfig:
             anchor_prob=number("anchor_prob", 1.0),
             anchor_max_multiplier=number("anchor_max_multiplier", 1.0),
             anchor_images=raw.get("anchor_images"),
+            symmetry_strength=number("symmetry_strength", 0.0),
+            symmetry_prob=number("symmetry_prob", 1.0),
+            symmetry_max_multiplier=number("symmetry_max_multiplier", 2.0),
             turbo_preview=raw.get("turbo_preview"),
             turbo_preview_steps=int(number("turbo_preview_steps", 8)),
             turbo_preview_cfg=number("turbo_preview_cfg", 1.0),
@@ -115,6 +130,12 @@ class SliderTrainConfig:
             raise ValueError("slider.anchor_strength must be >= 0")
         if not 0.0 <= config.anchor_prob <= 1.0:
             raise ValueError("slider.anchor_prob must be in [0, 1]")
+        if config.symmetry_strength < 0:
+            raise ValueError("slider.symmetry_strength must be >= 0")
+        if not 0.0 <= config.symmetry_prob <= 1.0:
+            raise ValueError("slider.symmetry_prob must be in [0, 1]")
+        if config.symmetry_max_multiplier <= 0:
+            raise ValueError("slider.symmetry_max_multiplier must be > 0")
         if config.anchor_max_multiplier < 0:
             raise ValueError("slider.anchor_max_multiplier must be >= 0")
         if not all(isinstance(p, str) and p.strip() for p in config.anchor_prompts):

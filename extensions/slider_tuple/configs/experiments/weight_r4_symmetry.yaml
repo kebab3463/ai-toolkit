@@ -1,0 +1,131 @@
+# Run 4: run 3b (rank 4, lr 3e-4) plus the symmetry loss. Question: does it
+# remove the even drift (sweep parity: even ~0, LPIPS at +m = -m small) so the
+# slider can keep growing past step 500? Checkpoints and samples every 125 steps.
+#
+# Data: datasets/weight_slider_tuples/measured/ (as runs 2 and 3). Sweep and compare:
+#   .venv/bin/python extensions/slider_tuple/scripts/slider_sweep.py \
+#       --model /home/csprunger/.nvme_cache/diffusion_models/Krea2/BigLoveKreaLife2_int8.safetensors \
+#       --lora output/weight_r4_symmetry/weight_r4_symmetry*.safetensors \
+#       --prompts datasets/weight_slider_tuples/held_out.jsonl \
+#       --multipliers 0,1,2,3 --diagnostic=-1,-2,-3 --measure body --out output/sweeps/weight_r4_symmetry
+#   .venv/bin/python extensions/slider_tuple/scripts/compare_sweeps.py --parity \
+#       output/sweeps/weight_r3b_rank4/* output/sweeps/weight_r4_symmetry/*
+#
+# Run (from the repo root), or start it from the web UI (README.md, "Web UI"):
+#   .venv/bin/python run.py extensions/slider_tuple/configs/experiments/weight_r4_symmetry.yaml
+---
+job: extension
+config:
+  name: "weight_r4_symmetry"
+  process:
+    - type: "slider_tuple_trainer"
+      training_folder: "output"
+      device: cuda:0
+      performance_log_every: 50
+      logging:
+        log_every: 1
+        use_ui_logger: true # per-step losses and slider/* metrics in output/<name>/loss_log.db
+      network:
+        type: "lora"
+        linear: 4 # run 2 / 3a: 16
+        linear_alpha: 4
+      save:
+        dtype: float16
+        save_every: 125 # run 3: 250; finer view past step 500
+        max_step_saves_to_keep: 16
+      datasets:
+        - slider_tuples: "datasets/weight_slider_tuples/measured/train.jsonl" # EDIT
+          guidance_type: "slider_tuple"
+          caption_dropout_rate: 0.0
+          cache_latents_to_disk: true
+          resolution: [1024]
+      slider:
+        # Multiplier unit: kappa = the median tuple span (0.114 body-width units
+        # here), so m = 1 is one typical edit's full change, and each tuple
+        # trains at multipliers proportional to how much its edit changed the
+        # body (strong edit +-0.94, typical +-0.5, weak +-0.16). Tuples spanning
+        # less than min_span x kappa are dropped (one here).
+        level_norm: median_span
+        members_per_step: all
+        # writes output/<name>/slider_debug/step<N>_<id>.png for the first
+        # steps: every member with its multiplier, to check the data by eye
+        debug_dump_steps: 2
+        # Anchor preservation (F4): with the LoRA at a random strength in
+        # [-anchor_max_multiplier, +], predictions on these prompts must stay
+        # the LoRA-off predictions. Costs two extra forwards when drawn
+        # (anchor_prob 1: +58% s/step in M5). Prompts without people keep the
+        # slider from changing scenes; add prompts for what must not change.
+        anchor_strength: 1.0
+        anchor_prob: 0.5
+        anchor_max_multiplier: 1.0
+        anchor_prompts:
+          - "a mountain lake at sunrise, pine trees, mist over the water"
+          - "a busy city street at night, neon signs, rain on the pavement"
+          - "a bowl of fruit on a wooden kitchen table, morning light"
+          - "an empty living room with a grey sofa and a bookshelf"
+          - "a red sports car parked in front of a garage"
+          - "a close-up of a tabby cat sleeping on a blanket"
+          - "a snowy forest path with tall evergreen trees"
+          - "a modern office interior with desks and large windows"
+        # Previews on the deployed Turbo model (F7): 8 steps, CFG off, mu
+        # 1.15, trainee LoRA as hooks at each prompt's --m. Raw waits on the CPU.
+        turbo_preview: "/home/csprunger/.nvme_cache/diffusion_models/Krea2/BigLoveKreaLife2_int8.safetensors" # EDIT
+        turbo_preview_offload: true
+        # symmetry loss (symmetry.py): the LoRA at +s and -s must average back to
+        # the LoRA-off prediction on the training images, s in [0, 3]. Removes
+        # the even drift that ended runs 3a / 3b after step 500. Strength 10: the
+        # drift is driven by the base model's full prediction error on the
+        # training images (the ~0.27 loss scale, times s^2), so a pull-back of 1
+        # would balance it only at a large drift. Untested; the sweep decides.
+        symmetry_strength: 10.0
+        symmetry_max_multiplier: 3.0
+        symmetry_prob: 0.5
+      train:
+        batch_size: 1
+        steps: 1000
+        gradient_accumulation: 1
+        train_unet: true
+        train_text_encoder: false
+        cache_text_embeddings: true
+        gradient_checkpointing: true
+        noise_scheduler: "flowmatch"
+        timestep_type: "linear" # UI default for Krea 2
+        optimizer: "adamw8bit"
+        lr: 3e-4 # run 2: 1e-4
+        dtype: bf16
+      model:
+        # Raw checkpoint to train on: a folder with one DiT .safetensors in the
+        # krea/Krea-2-Raw format (text encoder and VAE load from their defaults)
+        name_or_path: "models/BigLoveKreaLife2_raw_AI-Toolkit"
+        arch: "krea2"
+        dtype: bf16 # required: the float16 default breaks Krea 2 decoding (NOTES.md)
+        # convrot8 (= ComfyUI int8_convrot) is required on a 32 GB card and
+        # beat qfloat8 on speed, memory and layer error (NOTES.md)
+        quantize: true
+        qtype: "convrot8"
+        quantize_te: true
+        qtype_te: "qfloat8"
+        low_vram: false
+      sample:
+        sampler: "flowmatch"
+        sample_every: 125
+        width: 1024
+        height: 1024
+        # one prompt and seed at several strengths, so images differ only by --m;
+        # EDIT: use held-out captions (held_out.jsonl) for a fair look
+        prompts:
+          - "full-body photograph of a woman standing on a city sidewalk in jeans and a t-shirt --m -1"
+          - "full-body photograph of a woman standing on a city sidewalk in jeans and a t-shirt --m 0"
+          - "full-body photograph of a woman standing on a city sidewalk in jeans and a t-shirt --m 1"
+          - "full-body beach photograph of a man in swim shorts at the surf line --m -1"
+          - "full-body beach photograph of a man in swim shorts at the surf line --m 0"
+          - "full-body beach photograph of a man in swim shorts at the surf line --m 1"
+        neg: ""
+        seed: 42
+        walk_seed: false
+        # used only without turbo_preview (Raw sampling)
+        guidance_scale: 4
+        sample_steps: 25
+meta:
+  name: "[name]"
+  version: "1.0"
