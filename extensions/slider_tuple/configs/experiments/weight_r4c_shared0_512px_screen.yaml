@@ -1,0 +1,122 @@
+# Screening template: run 4c (rank 4, lr 3e-4, shared_residual_weight 0) at
+# 512 px training, without anchors, with a reduced in-training sweep:
+# 2 held-out prompts x seeds 1000-1001 x m in 0, +-1.5, +-3 = 20 previews per
+# sample step (~80 s on Turbo at 1024), every 125 steps for 750 steps.
+# Copy it and change one thing per screening variant.
+#
+#   .venv/bin/python extensions/slider_tuple/scripts/sweep_from_samples.py output/weight_r4c_shared0_512px_screen --measure body
+#   .venv/bin/python extensions/slider_tuple/scripts/compare_sweeps.py --parity output/sweeps/weight_r4c_shared0_512px_screen/*
+#
+#   .venv/bin/python run.py extensions/slider_tuple/configs/experiments/weight_r4c_shared0_512px_screen.yaml
+---
+job: extension
+config:
+  name: "weight_r4c_shared0_512px_screen"
+  process:
+    - type: "slider_tuple_trainer"
+      training_folder: "output"
+      device: cuda:0
+      performance_log_every: 50
+      logging:
+        log_every: 1
+        use_ui_logger: true # per-step losses and slider/* metrics in output/<name>/loss_log.db
+      network:
+        type: "lora"
+        linear: 4 # run 2 / 3a: 16
+        linear_alpha: 4
+      save:
+        dtype: float16
+        save_every: 125
+        max_step_saves_to_keep: 16
+      datasets:
+        - slider_tuples: "datasets/weight_slider_tuples/measured/train.jsonl" # EDIT
+          guidance_type: "slider_tuple"
+          caption_dropout_rate: 0.0
+          cache_latents_to_disk: true
+          resolution: [512]
+      slider:
+        # Multiplier unit: kappa = the median tuple span (0.114 body-width units
+        # here), so m = 1 is one typical edit's full change, and each tuple
+        # trains at multipliers proportional to how much its edit changed the
+        # body (strong edit +-0.94, typical +-0.5, weak +-0.16). Tuples spanning
+        # less than min_span x kappa are dropped (one here).
+        level_norm: median_span
+        members_per_step: all
+        # train only each member's deviation from the tuple's shared residual
+        # (loss.py): removes the drive of the drift both directions share
+        # (the even part) at its source, without the symmetry loss's brake
+        shared_residual_weight: 0.0
+        # writes output/<name>/slider_debug/step<N>_<id>.png for the first
+        # steps: every member with its multiplier, to check the data by eye
+        debug_dump_steps: 2
+        # no anchors in screening runs: ~1.3 s/step at 1024 for little effect so far
+        # Previews on the deployed Turbo model (F7): 8 steps, CFG off, mu
+        # 1.15, trainee LoRA as hooks at each prompt's --m. Raw waits on the CPU.
+        turbo_preview: "/home/csprunger/.nvme_cache/diffusion_models/Krea2/BigLoveKreaLife2_int8.safetensors" # EDIT
+        turbo_preview_offload: true
+      train:
+        batch_size: 1
+        steps: 750 # screening length: runs so far decided by step 500-750
+        gradient_accumulation: 1
+        train_unet: true
+        train_text_encoder: false
+        cache_text_embeddings: true
+        gradient_checkpointing: true
+        noise_scheduler: "flowmatch"
+        timestep_type: "linear" # UI default for Krea 2
+        optimizer: "adamw8bit"
+        lr: 3e-4 # run 2: 1e-4
+        dtype: bf16
+      model:
+        # Raw checkpoint to train on: a folder with one DiT .safetensors in the
+        # krea/Krea-2-Raw format (text encoder and VAE load from their defaults)
+        name_or_path: "models/BigLoveKreaLife2_raw_AI-Toolkit"
+        arch: "krea2"
+        dtype: bf16 # required: the float16 default breaks Krea 2 decoding (NOTES.md)
+        # convrot8 (= ComfyUI int8_convrot) is required on a 32 GB card and
+        # beat qfloat8 on speed, memory and layer error (NOTES.md)
+        quantize: true
+        qtype: "convrot8"
+        quantize_te: true
+        qtype_te: "qfloat8"
+        low_vram: false
+      sample:
+        format: "png"
+        sampler: "flowmatch"
+        sample_every: 125
+        width: 1024
+        height: 1024
+        # one prompt and seed at several strengths, so images differ only by --m;
+        # EDIT: use held-out captions (held_out.jsonl) for a fair look
+        neg: ""
+        seed: 42
+        walk_seed: false
+        # used only without turbo_preview (Raw sampling)
+        guidance_scale: 4
+        sample_steps: 25
+        # sweep grid (sweep_grid.py): prompt x seed x multiplier
+        # sweep grid (sweep_grid.py): prompt x seed x multiplier
+        samples:
+          - {prompt: "A frontal three-quarter studio fashion photograph captured at eye level against a plain textured beige backdrop. An adult woman in her thirties with warm medium-brown skin and a short, wavy dark-brown textured bob faces the camera, both arms raised overhead with her hands overlapping above her crown and elbows flared outward; she has small line-art tattoos on each inner forearm, a thin gold chain necklace, subtle makeup, and a neutral expression with slightly parted lips, looking directly into the lens. She wears an off-white ribbed scoop-neck longline tank top with wide shoulder straps and matching off-white high-cut bikini briefs. Soft, warm, diffuse studio lighting illuminates her from the front, casting minimal shadow and a clean, smooth finish with shallow depth of field keeping the backdrop softly out of focus.", seed: 1000, network_multiplier: -3.0}
+          - {prompt: "A frontal three-quarter studio fashion photograph captured at eye level against a plain textured beige backdrop. An adult woman in her thirties with warm medium-brown skin and a short, wavy dark-brown textured bob faces the camera, both arms raised overhead with her hands overlapping above her crown and elbows flared outward; she has small line-art tattoos on each inner forearm, a thin gold chain necklace, subtle makeup, and a neutral expression with slightly parted lips, looking directly into the lens. She wears an off-white ribbed scoop-neck longline tank top with wide shoulder straps and matching off-white high-cut bikini briefs. Soft, warm, diffuse studio lighting illuminates her from the front, casting minimal shadow and a clean, smooth finish with shallow depth of field keeping the backdrop softly out of focus.", seed: 1000, network_multiplier: -1.5}
+          - {prompt: "A frontal three-quarter studio fashion photograph captured at eye level against a plain textured beige backdrop. An adult woman in her thirties with warm medium-brown skin and a short, wavy dark-brown textured bob faces the camera, both arms raised overhead with her hands overlapping above her crown and elbows flared outward; she has small line-art tattoos on each inner forearm, a thin gold chain necklace, subtle makeup, and a neutral expression with slightly parted lips, looking directly into the lens. She wears an off-white ribbed scoop-neck longline tank top with wide shoulder straps and matching off-white high-cut bikini briefs. Soft, warm, diffuse studio lighting illuminates her from the front, casting minimal shadow and a clean, smooth finish with shallow depth of field keeping the backdrop softly out of focus.", seed: 1000, network_multiplier: 0.0}
+          - {prompt: "A frontal three-quarter studio fashion photograph captured at eye level against a plain textured beige backdrop. An adult woman in her thirties with warm medium-brown skin and a short, wavy dark-brown textured bob faces the camera, both arms raised overhead with her hands overlapping above her crown and elbows flared outward; she has small line-art tattoos on each inner forearm, a thin gold chain necklace, subtle makeup, and a neutral expression with slightly parted lips, looking directly into the lens. She wears an off-white ribbed scoop-neck longline tank top with wide shoulder straps and matching off-white high-cut bikini briefs. Soft, warm, diffuse studio lighting illuminates her from the front, casting minimal shadow and a clean, smooth finish with shallow depth of field keeping the backdrop softly out of focus.", seed: 1000, network_multiplier: 1.5}
+          - {prompt: "A frontal three-quarter studio fashion photograph captured at eye level against a plain textured beige backdrop. An adult woman in her thirties with warm medium-brown skin and a short, wavy dark-brown textured bob faces the camera, both arms raised overhead with her hands overlapping above her crown and elbows flared outward; she has small line-art tattoos on each inner forearm, a thin gold chain necklace, subtle makeup, and a neutral expression with slightly parted lips, looking directly into the lens. She wears an off-white ribbed scoop-neck longline tank top with wide shoulder straps and matching off-white high-cut bikini briefs. Soft, warm, diffuse studio lighting illuminates her from the front, casting minimal shadow and a clean, smooth finish with shallow depth of field keeping the backdrop softly out of focus.", seed: 1000, network_multiplier: 3.0}
+          - {prompt: "A frontal three-quarter studio fashion photograph captured at eye level against a plain textured beige backdrop. An adult woman in her thirties with warm medium-brown skin and a short, wavy dark-brown textured bob faces the camera, both arms raised overhead with her hands overlapping above her crown and elbows flared outward; she has small line-art tattoos on each inner forearm, a thin gold chain necklace, subtle makeup, and a neutral expression with slightly parted lips, looking directly into the lens. She wears an off-white ribbed scoop-neck longline tank top with wide shoulder straps and matching off-white high-cut bikini briefs. Soft, warm, diffuse studio lighting illuminates her from the front, casting minimal shadow and a clean, smooth finish with shallow depth of field keeping the backdrop softly out of focus.", seed: 1001, network_multiplier: -3.0}
+          - {prompt: "A frontal three-quarter studio fashion photograph captured at eye level against a plain textured beige backdrop. An adult woman in her thirties with warm medium-brown skin and a short, wavy dark-brown textured bob faces the camera, both arms raised overhead with her hands overlapping above her crown and elbows flared outward; she has small line-art tattoos on each inner forearm, a thin gold chain necklace, subtle makeup, and a neutral expression with slightly parted lips, looking directly into the lens. She wears an off-white ribbed scoop-neck longline tank top with wide shoulder straps and matching off-white high-cut bikini briefs. Soft, warm, diffuse studio lighting illuminates her from the front, casting minimal shadow and a clean, smooth finish with shallow depth of field keeping the backdrop softly out of focus.", seed: 1001, network_multiplier: -1.5}
+          - {prompt: "A frontal three-quarter studio fashion photograph captured at eye level against a plain textured beige backdrop. An adult woman in her thirties with warm medium-brown skin and a short, wavy dark-brown textured bob faces the camera, both arms raised overhead with her hands overlapping above her crown and elbows flared outward; she has small line-art tattoos on each inner forearm, a thin gold chain necklace, subtle makeup, and a neutral expression with slightly parted lips, looking directly into the lens. She wears an off-white ribbed scoop-neck longline tank top with wide shoulder straps and matching off-white high-cut bikini briefs. Soft, warm, diffuse studio lighting illuminates her from the front, casting minimal shadow and a clean, smooth finish with shallow depth of field keeping the backdrop softly out of focus.", seed: 1001, network_multiplier: 0.0}
+          - {prompt: "A frontal three-quarter studio fashion photograph captured at eye level against a plain textured beige backdrop. An adult woman in her thirties with warm medium-brown skin and a short, wavy dark-brown textured bob faces the camera, both arms raised overhead with her hands overlapping above her crown and elbows flared outward; she has small line-art tattoos on each inner forearm, a thin gold chain necklace, subtle makeup, and a neutral expression with slightly parted lips, looking directly into the lens. She wears an off-white ribbed scoop-neck longline tank top with wide shoulder straps and matching off-white high-cut bikini briefs. Soft, warm, diffuse studio lighting illuminates her from the front, casting minimal shadow and a clean, smooth finish with shallow depth of field keeping the backdrop softly out of focus.", seed: 1001, network_multiplier: 1.5}
+          - {prompt: "A frontal three-quarter studio fashion photograph captured at eye level against a plain textured beige backdrop. An adult woman in her thirties with warm medium-brown skin and a short, wavy dark-brown textured bob faces the camera, both arms raised overhead with her hands overlapping above her crown and elbows flared outward; she has small line-art tattoos on each inner forearm, a thin gold chain necklace, subtle makeup, and a neutral expression with slightly parted lips, looking directly into the lens. She wears an off-white ribbed scoop-neck longline tank top with wide shoulder straps and matching off-white high-cut bikini briefs. Soft, warm, diffuse studio lighting illuminates her from the front, casting minimal shadow and a clean, smooth finish with shallow depth of field keeping the backdrop softly out of focus.", seed: 1001, network_multiplier: 3.0}
+          - {prompt: "Outdoor full-body beach photograph, camera at chest height, the subject shown from a three-quarter rear angle with her head turned back over her shoulder to face the lens. She is a dark-skinned adult woman with dark brown coily hair gathered up and loose tendrils framing her face, a thin gold bracelet on one wrist, neutral expression and direct gaze. She stands in shallow surf with feet apart in the foam, one arm folded across her torso and the other hand placed at her hip, body upright. She wears a navy blue one-piece swimsuit with halter straps, gold circular ring hardware at the center front, and an open scoop back. Behind her, white breaking waves roll across a muted blue-green sea under a pale overcast sky. Bright, soft, diffuse daylight casts a soft shadow on the wet sand, with a cool neutral grade and gently softened background.", seed: 1000, network_multiplier: -3.0}
+          - {prompt: "Outdoor full-body beach photograph, camera at chest height, the subject shown from a three-quarter rear angle with her head turned back over her shoulder to face the lens. She is a dark-skinned adult woman with dark brown coily hair gathered up and loose tendrils framing her face, a thin gold bracelet on one wrist, neutral expression and direct gaze. She stands in shallow surf with feet apart in the foam, one arm folded across her torso and the other hand placed at her hip, body upright. She wears a navy blue one-piece swimsuit with halter straps, gold circular ring hardware at the center front, and an open scoop back. Behind her, white breaking waves roll across a muted blue-green sea under a pale overcast sky. Bright, soft, diffuse daylight casts a soft shadow on the wet sand, with a cool neutral grade and gently softened background.", seed: 1000, network_multiplier: -1.5}
+          - {prompt: "Outdoor full-body beach photograph, camera at chest height, the subject shown from a three-quarter rear angle with her head turned back over her shoulder to face the lens. She is a dark-skinned adult woman with dark brown coily hair gathered up and loose tendrils framing her face, a thin gold bracelet on one wrist, neutral expression and direct gaze. She stands in shallow surf with feet apart in the foam, one arm folded across her torso and the other hand placed at her hip, body upright. She wears a navy blue one-piece swimsuit with halter straps, gold circular ring hardware at the center front, and an open scoop back. Behind her, white breaking waves roll across a muted blue-green sea under a pale overcast sky. Bright, soft, diffuse daylight casts a soft shadow on the wet sand, with a cool neutral grade and gently softened background.", seed: 1000, network_multiplier: 0.0}
+          - {prompt: "Outdoor full-body beach photograph, camera at chest height, the subject shown from a three-quarter rear angle with her head turned back over her shoulder to face the lens. She is a dark-skinned adult woman with dark brown coily hair gathered up and loose tendrils framing her face, a thin gold bracelet on one wrist, neutral expression and direct gaze. She stands in shallow surf with feet apart in the foam, one arm folded across her torso and the other hand placed at her hip, body upright. She wears a navy blue one-piece swimsuit with halter straps, gold circular ring hardware at the center front, and an open scoop back. Behind her, white breaking waves roll across a muted blue-green sea under a pale overcast sky. Bright, soft, diffuse daylight casts a soft shadow on the wet sand, with a cool neutral grade and gently softened background.", seed: 1000, network_multiplier: 1.5}
+          - {prompt: "Outdoor full-body beach photograph, camera at chest height, the subject shown from a three-quarter rear angle with her head turned back over her shoulder to face the lens. She is a dark-skinned adult woman with dark brown coily hair gathered up and loose tendrils framing her face, a thin gold bracelet on one wrist, neutral expression and direct gaze. She stands in shallow surf with feet apart in the foam, one arm folded across her torso and the other hand placed at her hip, body upright. She wears a navy blue one-piece swimsuit with halter straps, gold circular ring hardware at the center front, and an open scoop back. Behind her, white breaking waves roll across a muted blue-green sea under a pale overcast sky. Bright, soft, diffuse daylight casts a soft shadow on the wet sand, with a cool neutral grade and gently softened background.", seed: 1000, network_multiplier: 3.0}
+          - {prompt: "Outdoor full-body beach photograph, camera at chest height, the subject shown from a three-quarter rear angle with her head turned back over her shoulder to face the lens. She is a dark-skinned adult woman with dark brown coily hair gathered up and loose tendrils framing her face, a thin gold bracelet on one wrist, neutral expression and direct gaze. She stands in shallow surf with feet apart in the foam, one arm folded across her torso and the other hand placed at her hip, body upright. She wears a navy blue one-piece swimsuit with halter straps, gold circular ring hardware at the center front, and an open scoop back. Behind her, white breaking waves roll across a muted blue-green sea under a pale overcast sky. Bright, soft, diffuse daylight casts a soft shadow on the wet sand, with a cool neutral grade and gently softened background.", seed: 1001, network_multiplier: -3.0}
+          - {prompt: "Outdoor full-body beach photograph, camera at chest height, the subject shown from a three-quarter rear angle with her head turned back over her shoulder to face the lens. She is a dark-skinned adult woman with dark brown coily hair gathered up and loose tendrils framing her face, a thin gold bracelet on one wrist, neutral expression and direct gaze. She stands in shallow surf with feet apart in the foam, one arm folded across her torso and the other hand placed at her hip, body upright. She wears a navy blue one-piece swimsuit with halter straps, gold circular ring hardware at the center front, and an open scoop back. Behind her, white breaking waves roll across a muted blue-green sea under a pale overcast sky. Bright, soft, diffuse daylight casts a soft shadow on the wet sand, with a cool neutral grade and gently softened background.", seed: 1001, network_multiplier: -1.5}
+          - {prompt: "Outdoor full-body beach photograph, camera at chest height, the subject shown from a three-quarter rear angle with her head turned back over her shoulder to face the lens. She is a dark-skinned adult woman with dark brown coily hair gathered up and loose tendrils framing her face, a thin gold bracelet on one wrist, neutral expression and direct gaze. She stands in shallow surf with feet apart in the foam, one arm folded across her torso and the other hand placed at her hip, body upright. She wears a navy blue one-piece swimsuit with halter straps, gold circular ring hardware at the center front, and an open scoop back. Behind her, white breaking waves roll across a muted blue-green sea under a pale overcast sky. Bright, soft, diffuse daylight casts a soft shadow on the wet sand, with a cool neutral grade and gently softened background.", seed: 1001, network_multiplier: 0.0}
+          - {prompt: "Outdoor full-body beach photograph, camera at chest height, the subject shown from a three-quarter rear angle with her head turned back over her shoulder to face the lens. She is a dark-skinned adult woman with dark brown coily hair gathered up and loose tendrils framing her face, a thin gold bracelet on one wrist, neutral expression and direct gaze. She stands in shallow surf with feet apart in the foam, one arm folded across her torso and the other hand placed at her hip, body upright. She wears a navy blue one-piece swimsuit with halter straps, gold circular ring hardware at the center front, and an open scoop back. Behind her, white breaking waves roll across a muted blue-green sea under a pale overcast sky. Bright, soft, diffuse daylight casts a soft shadow on the wet sand, with a cool neutral grade and gently softened background.", seed: 1001, network_multiplier: 1.5}
+          - {prompt: "Outdoor full-body beach photograph, camera at chest height, the subject shown from a three-quarter rear angle with her head turned back over her shoulder to face the lens. She is a dark-skinned adult woman with dark brown coily hair gathered up and loose tendrils framing her face, a thin gold bracelet on one wrist, neutral expression and direct gaze. She stands in shallow surf with feet apart in the foam, one arm folded across her torso and the other hand placed at her hip, body upright. She wears a navy blue one-piece swimsuit with halter straps, gold circular ring hardware at the center front, and an open scoop back. Behind her, white breaking waves roll across a muted blue-green sea under a pale overcast sky. Bright, soft, diffuse daylight casts a soft shadow on the wet sand, with a cool neutral grade and gently softened background.", seed: 1001, network_multiplier: 3.0}
+meta:
+  name: "[name]"
+  version: "1.0"
