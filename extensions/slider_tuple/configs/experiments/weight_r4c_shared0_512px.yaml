@@ -1,3 +1,6 @@
+# RESULT (2026-10-21): with lr 3e-4 this broke by step 375 (speckle at |m| >= 1-2);
+# see NOTES.md. weight_r4c_shared0.yaml now uses lr 1e-4.
+#
 # Run 4c at 512 px: weight_r4c_shared0.yaml with the training resolution at 512
 # instead of 1024 (previews and their in-training sweep still render at 1024, so
 # both runs are evaluated identically). Question: would screening at 512 px rank

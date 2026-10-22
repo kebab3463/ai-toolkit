@@ -1,8 +1,13 @@
-# Run 4c: run 3b (rank 4, lr 3e-4) with shared_residual_weight 0 ("differential
+# Run 4c: run 3b (rank 4) with shared_residual_weight 0 ("differential
 # guidance on the difference", loss.py) and no symmetry loss. Question: does the
 # slider keep growing past step 500 while the even part stays small, without
 # the symmetry loss's brake (run 4)? Compare with 3b and 4b. Checkpoints and
 # samples every 125 steps; no extra forwards, so about 3b's speed (~5.8 s/step).
+# lr 1e-4, not 3b's 3e-4: at 512 px, lambda 0 with lr 3e-4 broke by step 375
+# (high-frequency speckle at |m| >= 1-2, both signs; loss spike at steps
+# 200-300). With the shared residual removed, Adam's per-weight scaling is no
+# longer dominated by it, so the same lr takes much larger steps along the
+# member differences, which include the edits' texture changes (NOTES.md).
 # 750 steps (screening length). Scene anchors kept, as in 3b, so 4c vs 3b tests
 # lambda alone. weight_r4c_shared0_512px.yaml is this at 512 px training.
 #
@@ -88,7 +93,7 @@ config:
         noise_scheduler: "flowmatch"
         timestep_type: "linear" # UI default for Krea 2
         optimizer: "adamw8bit"
-        lr: 3e-4 # run 2: 1e-4
+        lr: 1e-4 # 3b: 3e-4; lambda 0 raises the effective step (see header)
         dtype: bf16
       model:
         # Raw checkpoint to train on: a folder with one DiT .safetensors in the

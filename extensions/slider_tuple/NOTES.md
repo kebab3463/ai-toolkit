@@ -935,3 +935,25 @@ checkpoints), while everything decisive happened by step 500-750.
   strength 10 / |s| 3, brake then failure at 1 / 1.5). 3b @500 stays the best
   checkpoint. Next: lambda (4c), which removes the drift's drive instead of
   penalizing its result.
+
+### Run 4c at 512 px, lr 3e-4: breaks by step 375 (2026-10-21)
+
+Trained first because 512 px is fast: 1.54 s/step vs ~5.8 at 1024 (3.8x).
+Previews (the 42-image in-training sweep, rendered at 1024): almost no change
+through step 250; at step 375 strengths beyond about ±1 fill the image with
+high-frequency, confetti-like speckle in both directions. Training loss rose
+0.33 -> 0.40 around steps 200-300 before falling back; the anchor loss was
+~10x the 1024 runs' (8e-4).
+
+- **Likely cause: lambda 0 raises the effective learning rate.** Adam divides
+  each weight's update by its running gradient size. With lambda 1 that size
+  is dominated by the shared residual (the base model's ordinary prediction
+  error), so the small slider signal moves in small steps. With lambda 0 that
+  part is gone, and the same lr takes much larger steps along the member
+  differences, which carry the edits' texture changes as well as body shape.
+  So lambda < 1 is also an lr increase. Not anticipated when lambda was built.
+- **512 px is the other suspect.** Two runs separate them: the user's
+  `weight_r4c_shared0_512px_screen_lr1e-4` (lambda 0, lr 1e-4, no anchors,
+  20-image grid) and `weight_r3b_rank4_512px` (3b exactly, at 512: a check
+  against 3b's known 1024 sweeps). `weight_r4c_shared0.yaml` (1024) now uses
+  lr 1e-4 so the overnight run doesn't repeat the failure.
