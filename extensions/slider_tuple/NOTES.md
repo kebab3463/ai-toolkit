@@ -981,3 +981,21 @@ high-frequency, confetti-like speckle in both directions. Training loss rose
   breakdown; it gave no early warning at steps 100-200.
 - `train.skip_first_sample: true` from now on (sweep_grid.py sets it): the
   step-0 previews are all the base model.
+
+### LR scheduling for polishing; anchors don't matter (2026-10-21)
+
+- **Anchors:** `weight_r3b_rank4_512px_no-anchors` (the user's; same settings
+  as `weight_s512_base`, which is therefore redundant) broke at ~step 372, like
+  the anchored 3b-512 at ~375. The scene anchors don't change the breakdown;
+  screening runs drop them. That run's 62-step previews through 372 are the
+  screening baseline.
+- **Schedules:** the fork's `train.stages` (per-stage lr / scheduler / grad
+  clipping / timestep type, switched in the shared training loop) work with the
+  slider trainer unchanged. `weight_s512_stages.yaml`: 250 steps at 3e-4, then
+  250 steps cosine from 1e-4 to 0. `scripts/branch_run.py` continues a run from
+  a chosen checkpoint (`network.pretrained_lora_path`, fresh optimizer, steps
+  from 0, step-0 previews kept as the starting reference). Expectation: a
+  lower lr moves along the same path more slowly and less noisily, which may
+  give a cleaner best checkpoint but does not remove the drift (the drift comes
+  from the objective). The user plans to use these for polishing a slider that
+  already works rather than now.

@@ -301,6 +301,16 @@ linearity and side effects:
   training data's common content, whichever way it is turned. In the weight
   runs it grew faster than the slider with training and marked where
   checkpoints turned bad (NOTES.md, "Run 3").
+- **Learning-rate schedules** (this fork's `train.stages`: per-stage `steps`,
+  `lr`, `lr_scheduler` (cosine / linear / step / ...), `max_grad_norm`,
+  `timestep_type`) work with the slider trainer. Decided in advance, e.g. learn
+  at 3e-4, then decay (`configs/experiments/weight_s512_stages.yaml`). Decided
+  from what the previews show: `scripts/branch_run.py output/<run> <step> --lr
+  1e-4 --scheduler cosine --steps 250 --register` continues from that
+  checkpoint (weights only; fresh optimizer; its step-0 previews show the
+  starting point). Best saved for polishing a slider that already works: a
+  lower lr moves along the same path more slowly and less noisily, it doesn't
+  remove the drift.
 - `--resummarize` rewrites the summary and sheets from `sweep.csv` without
   loading models (e.g. after a tooling update).
 - **In-training sweeps (faster; the default for experiments):** make the
@@ -414,6 +424,7 @@ Dataset entries take `slider_tuples: <manifest>` with
 | `scripts/sweep_from_samples.py` | sweep tables from a run's sample images, one folder per step (§4) |
 | `scripts/compare_sweeps.py` | per-multiplier tables of several sweeps side by side (§4) |
 | `scripts/image_lpips.py` | LPIPS between images |
+| `scripts/branch_run.py` | continue a run from one of its checkpoints with a new lr / schedule (§4) |
 | `scripts/ui_jobs.py` | register configs (and finished runs) as web UI jobs (§3) |
 | `scripts/dev/compare_runs.py` | two configs, same seed, short runs: loss / speed / memory A/B |
 | `scripts/dev/make_smoke_pairs.py` | synthetic pairs for plumbing tests (not training data) |
