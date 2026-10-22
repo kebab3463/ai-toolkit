@@ -916,3 +916,22 @@ checkpoints), while everything decisive happened by step 500-750.
   at 512, previews at 1024 so both are evaluated identically). If 512 ranks and
   reads like 1024, screen at 512. Note at 512 the previews (~20 min per run)
   cost about as much as the training; a smaller grid would then pay off.
+
+### Run 4b results: mild symmetry loss is worse than none (2026-10-21)
+
+|m| = 2, slider (odd) / drift (even) part, bg LPIPS at +m / -m:
+
+| | step 500 | step 750 | final (1000) |
+| --- | --- | --- | --- |
+| 3b | +0.093 / +0.025, 0.14 / 0.11 | +0.261 / +0.257, 0.33 / 0.31 | +0.199 / +0.309, 0.38 / 0.36 |
+| 4b | +0.039 / +0.011, 0.15 / 0.11 | +0.041 / +0.057, 0.22 / 0.17 | +0.186 / +0.165, 0.44 / 0.86 |
+
+- Early it brakes (less than half of 3b's slider at the same drift; the odd
+  part even negative at step 625); late the even part returns anyway and the
+  final bg LPIPS is worse than 3b's (0.86 / 0.98 at -2 / -3). The penalty only
+  covered |s| <= 1.5, and the drift appeared beyond it. Training-log symmetry
+  mse rose ~20x after step 500 (6e-4, 1.2e-3).
+- Conclusion: the symmetry loss doesn't work here at either setting (brake at
+  strength 10 / |s| 3, brake then failure at 1 / 1.5). 3b @500 stays the best
+  checkpoint. Next: lambda (4c), which removes the drift's drive instead of
+  penalizing its result.
