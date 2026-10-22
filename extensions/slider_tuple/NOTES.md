@@ -866,3 +866,33 @@ each person independently in couple photos. Built while run 4 trains:
 - Next candidates: mild symmetry (strength ~1, max multiplier ~1.5, only
   the strengths actually used), or none, with 3b @500 as the working point.
   Learning the direction is limited by the data's weak signal either way.
+
+### Shared residual weight (lambda): differential guidance adapted (2026-10-21)
+
+The user asked about adapting DOP and differential guidance (DG) to the slider,
+not using the options as they are (those are skipped on the slider path, and
+the trainer now warns).
+
+- **DG** sets target' = pred + g (target - pred): for a single MSE a gradient
+  scale that Adam normalizes away. Its useful core, amplifying one part of the
+  error, applies to the *difference* between members. With r_j = target_j -
+  pred_j and r the tuple's weighted mean, members train toward target_j - (1 -
+  lambda) r (`slider.shared_residual_weight`). No extra forwards (members share
+  one batched forward); with `backward_per_member` one no-grad prepass.
+- **What it does** (tests on an odd + even stub): the even part's gradient,
+  driven by (v0 - c) sum w s^2, the shared residual, is gone at lambda = 0
+  for identical member inputs and scales with the inputs' difference
+  otherwise (tuple members differ only in the body). Not free for the slider
+  either: the linear part also loses r * sum w s_j (x_j - x), the shared
+  residual where the inputs differ, odd in s and of the same order as the
+  slider signal (damped at high noise). Unlike the symmetry loss it puts no
+  size penalty on the LoRA.
+- **Run 4c:** `configs/experiments/weight_r4c_shared0.yaml` = 3b + lambda 0, no
+  symmetry loss.
+- **DOP adapted (parked for women-only):** gender-swapped captions on the
+  training image's own noisy latent, LoRA at a random strength must match the
+  frozen model, a data-free form of men anchors.
+- **From the Concept LoRA guide, not yet tried:** `timestep_type: shift`
+  (Krea's own schedule; half the steps above sigma 0.76 instead of 0.5) vs our
+  `linear`; rank 2 / attention-only; leakage prompts (scenes, people) in the
+  sweep; delayed LoRA activation at inference.

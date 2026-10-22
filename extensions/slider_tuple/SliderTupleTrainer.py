@@ -288,6 +288,7 @@ class SliderTupleTrainer(DiffusionTrainer):
             batch=batch,
             train_config=self.train_config,
             backward_per_member=cfg.backward_per_member,
+            shared_weight=cfg.shared_residual_weight,
             slot_masks=self.gather_member_masks(tuples, picks, batch),
             member_losses=member_losses,
         )

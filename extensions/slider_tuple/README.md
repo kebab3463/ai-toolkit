@@ -371,6 +371,7 @@ linearity and side effects:
 | `min_span` | 0.3 | drop tuples (and subsets) spanning less, in κ units |
 | `weight_cap_pct` | 95 | cap each tuple's leverage at this percentile |
 | `backward_per_member` | false | one backward per member (less memory, slower) |
+| `shared_residual_weight` | 1.0 | λ: < 1 trains each member's deviation from the tuple's shared residual more than the shared part; 0 removes the drive of the shared drift (loss.py) |
 | `debug_dump_steps` | 0 | write member sheets for the first N steps |
 | `anchor_strength` | 0 (off) | weight of the anchor loss |
 | `anchor_prompts` | [] | prompts whose predictions the LoRA must not change (noised from the batch) |

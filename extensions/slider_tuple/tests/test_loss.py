@@ -130,3 +130,64 @@ def test_offset_half_span_zeroes_the_lower_members_gradient():
     grad_upper_only, _ = tuple_grad([upper], [levels[0]], [1.0], kappa=kappa, offset=1.0, zero_lora=False)
     assert torch.allclose(grad_pair, grad_upper_only, rtol=1e-5, atol=1e-7)
     assert grad_pair.abs().max() > 1e-3
+
+
+def run_lambda(sd, shared_weight, backward_per_member=False, scales=(0.7, -0.7), weights=(1.0, 1.0), seed=5,
+               difference=None):
+    """A pair; ``difference`` makes the second member the first plus that much noise (members of
+    a real tuple differ only in the body), else two independent latents."""
+    after, before, noise, timesteps = make_pair(batch_size=2, seed=seed)
+    if difference is not None:
+        before = after + difference * torch.randn(after.shape, generator=torch.Generator().manual_seed(seed + 9))
+    return slider_tuple_loss(
+        sd, slot_latents=[after, before], slot_scales=[[scales[0]] * 2, [scales[1]] * 2],
+        slot_weights=[[weights[0]] * 2, [weights[1]] * 2], noise=noise, timesteps=timesteps,
+        conditional_embeds=make_embeds(2), pred_kwargs={}, batch=make_batch(after),
+        train_config=make_train_config(), backward_per_member=backward_per_member, shared_weight=shared_weight,
+    )
+
+
+def even_grad(shared_weight, difference):
+    from .test_symmetry import EvenStub
+    sd = EvenStub()
+    loss = run_lambda(sd, shared_weight, difference=difference)
+    return sd, loss, sd.even.weight.grad.abs().max().item()
+
+
+def test_lambda_zero_removes_the_even_drive_and_keeps_the_slider():
+    # identical member latents: the even part gets exactly no gradient at lambda = 0
+    assert even_grad(0.0, 0.0)[2] < 1e-7 and even_grad(1.0, 0.0)[2] > 1e-3
+    # members that differ a little (as real tuple members do): the leftover drive shrinks with
+    # the difference, while lambda = 1 keeps the full shared-residual drive
+    small, medium = even_grad(0.0, 0.05)[2], even_grad(0.0, 0.2)[2]
+    plain_sd, plain_loss, plain = even_grad(1.0, 0.05)
+    diff_sd, diff_loss, _ = even_grad(0.0, 0.05)
+    assert small < 0.1 * plain and small < medium
+    assert plain_loss.item() == pytest.approx(diff_loss.item())   # the reported loss is the plain MSE
+    # the slider (odd) gradient is unchanged for identical member inputs; otherwise lambda also drops
+    # the term r_shared * sum_j w s_j (x_j - x_mean), which is odd in s (documented in loss.py)
+    same_plain, same_diff = even_grad(1.0, 0.0)[0], even_grad(0.0, 0.0)[0]
+    assert torch.allclose(same_plain.lora.weight.grad, same_diff.lora.weight.grad, atol=1e-6)
+
+
+def test_lambda_between_and_per_member_path():
+    from .test_symmetry import EvenStub
+    grads = []
+    for lam in (1.0, 0.5, 0.0):
+        sd = EvenStub()
+        run_lambda(sd, lam)
+        grads.append(sd.even.weight.grad.clone())
+    assert torch.allclose(grads[1], (grads[0] + grads[2]) / 2, atol=1e-6)  # linear in lambda
+    batched, per_member = EvenStub(), EvenStub()
+    a = run_lambda(batched, 0.3)
+    b = run_lambda(per_member, 0.3, backward_per_member=True)
+    assert a.item() == pytest.approx(b.item(), rel=1e-6)
+    assert torch.allclose(batched.even.weight.grad, per_member.even.weight.grad, atol=1e-6)
+    assert torch.allclose(batched.lora.weight.grad, per_member.lora.weight.grad, atol=1e-6)
+
+
+def test_lambda_validation():
+    from extensions.slider_tuple.tuples import SliderTrainConfig
+    with pytest.raises(ValueError, match="shared_residual_weight"):
+        SliderTrainConfig.from_raw({"shared_residual_weight": 1.5})
+    assert SliderTrainConfig.from_raw({}).shared_residual_weight == 1.0

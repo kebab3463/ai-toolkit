@@ -11,6 +11,24 @@ squared error element-wise after being resized to the latent size the way
 SDTrainer builds mask_multiplier (nearest interpolate, expanded over
 channels) and normalized to mean 1 per member.
 
+Shared residual weight (lambda, ``shared_weight``): with r_bj = target_bj - v_bj
+the residual of member j and r_b = sum_j w_bj r_bj / sum_j w_bj the tuple's
+shared part, member j trains toward target_bj - (1 - lambda) r_b. lambda = 1 is
+the plain loss above. Lower lambda weights the shared residual down against
+each member's deviation r_bj - r_b, which carries the slider.
+
+What it changes, with x_j the members' noisy inputs and x their mean: the part
+of the LoRA's effect that is even in s, which the shared residual trains toward
+the members' common content (NOTES.md, "Run 3 results"), loses that drive; at
+lambda = 0 what is left is of order (x_j - x) x (r_j - r), zero for identical
+inputs and small for tuple members, which differ only in the body. The part
+linear in s keeps its main term (sum_j w s = 0 cancels r there) but also loses
+r * sum_j w s_j (x_j - x): the shared residual where the members' inputs
+differ. That term is odd in s and of the same order as the slider signal
+(damped by (1 - t) at high noise), so lambda < 1 is not free for the slider
+either; whether dropping it helps is an experiment. The reported loss is the
+plain MSE either way.
+
 Two members at scales +w / -w with unit weights and no masks is exactly
 upstream's ``polarity`` loss (toolkit/guidance.py get_guided_loss_polarity),
 whose code path this mirrors: same scheduler call, noising, conditioning,
@@ -62,13 +80,14 @@ def slider_tuple_loss(
     backward_per_member: bool = False,
     slot_masks: Optional[Sequence[Optional[torch.Tensor]]] = None,
     member_losses: Optional[List[List[float]]] = None,
+    shared_weight: float = 1.0,
 ) -> torch.Tensor:
     """slot_latents[j]: (B, ...) clean latents of slot j; slot_scales[j][b] and
     slot_weights[j][b]: LoRA multiplier and loss weight of tuple b's member in
     slot j; slot_masks[j]: (B, 1, H, W) pixel loss masks for slot j, or None
     for unmasked. If ``member_losses`` is a list, it receives each slot's
-    per-item (masked, unweighted) MSE. Returns the detached total loss
-    (backward already done)."""
+    per-item (masked, unweighted) MSE. ``shared_weight``: lambda above.
+    Returns the detached total loss (backward already done)."""
     m = len(slot_latents)
     per_slot: List[Optional[List[float]]] = [None] * m
     dtype = get_torch_dtype(sd.torch_dtype)
@@ -93,38 +112,60 @@ def slider_tuple_loss(
         sd.unet.train()
         sd.network.is_active = True
 
-    def run(slots: List[int]) -> torch.Tensor:
+    def predict(slots: List[int]) -> torch.Tensor:
         with torch.no_grad():
             sd.network.multiplier = [float(s) for j in slots for s in slot_scales[j]]
             cat_embeds = concat_prompt_embeds([conditional_embeds] * len(slots))
             cat_latents = torch.cat([noisy[j] for j in slots], dim=0)
             cat_timesteps = torch.cat([timesteps] * len(slots), dim=0)
-        prediction = sd.predict_noise(
+        return sd.predict_noise(
             latents=cat_latents.to(device, dtype=dtype).detach(),
             conditional_embeddings=cat_embeds.to(device, dtype=dtype).detach(),
             timestep=cat_timesteps,
             guidance_scale=1.0,
             **pred_kwargs,
         )
-        total = 0.0
-        for j, pred in zip(slots, torch.chunk(prediction, len(slots), dim=0)):
-            mse = torch.nn.functional.mse_loss(pred.float(), targets[j].float(), reduction="none")
-            if masks[j] is not None:
-                mse = mse * masks[j]
-            per_item = mse.mean(dim=list(range(1, mse.dim())))
-            per_slot[j] = per_item.detach().tolist()
-            total = total + (weights[j] * per_item).mean()
-        return total
 
+    def shared_residual(preds: List[torch.Tensor]) -> torch.Tensor:
+        """Per tuple, the weighted mean over members of target - prediction (detached)."""
+        with torch.no_grad():
+            total = sum(weights[j].view(-1, *[1] * (preds[j].dim() - 1)) for j in range(m))
+            return sum(
+                weights[j].view(-1, *[1] * (preds[j].dim() - 1)) * (targets[j].float() - preds[j].detach().float())
+                for j in range(m)
+            ) / total
+
+    def slot_loss(j: int, pred: torch.Tensor, shift: Optional[torch.Tensor]):
+        """(loss to backpropagate, plain per-item MSE) for slot j; ``shift`` = (1 - lambda) r."""
+        target = targets[j].float() if shift is None else targets[j].float() - shift
+        mse = torch.nn.functional.mse_loss(pred.float(), target, reduction="none")
+        plain = mse if shift is None else (pred.detach().float() - targets[j].float()) ** 2
+        if masks[j] is not None:
+            mse, plain = mse * masks[j], plain * masks[j]
+        dims = list(range(1, mse.dim()))
+        per_item = plain.mean(dim=dims)
+        per_slot[j] = per_item.detach().tolist()
+        return (weights[j] * mse.mean(dim=dims)).mean(), (weights[j] * per_item).mean().detach()
+
+    reshape = shared_weight != 1.0
     if backward_per_member:
+        shift = None
+        if reshape:  # the shared residual needs every member's prediction first
+            with torch.no_grad():
+                shift = (1.0 - shared_weight) * shared_residual([predict([j]) for j in range(m)])
         loss = 0.0
         for j in range(m):
-            slot_loss = run([j])
-            slot_loss.backward()
-            loss = loss + slot_loss.detach()
+            train, plain = slot_loss(j, predict([j]), shift)
+            train.backward()
+            loss = loss + plain
     else:
-        loss = run(list(range(m)))
-        loss.backward()
+        preds = list(torch.chunk(predict(list(range(m))), m, dim=0))
+        shift = (1.0 - shared_weight) * shared_residual(preds) if reshape else None
+        train, loss = 0.0, 0.0
+        for j in range(m):
+            t, plain = slot_loss(j, preds[j], shift)
+            train, loss = train + t, loss + plain
+        train.backward()
 
     if member_losses is not None:
         member_losses.extend(per_slot)

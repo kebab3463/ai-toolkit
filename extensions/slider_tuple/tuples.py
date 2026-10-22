@@ -14,6 +14,9 @@ Process-level options live in a ``slider:`` block (centering.py has the math):
       min_span: 0.3                # in kappa units; smaller tuples / subsets are dropped
       weight_cap_pct: 95           # cap each tuple's leverage at this percentile (100 = off)
       backward_per_member: false   # one forward/backward per member (flat memory)
+      shared_residual_weight: 1.0  # lambda (loss.py): < 1 trains each member's deviation from the
+                                   # tuple's shared residual more than the shared part; 0 removes
+                                   # the drive of the drift both directions share
       center_offset: 0.0           # test hook only: breaks the shared-content cancellation
       debug_dump_steps: 0          # dump crop-aligned members for the first N steps
       # anchor preservation (F4, anchors.py); off while anchor_strength is 0
@@ -48,6 +51,7 @@ from .manifest import SliderTuple, load_manifest
 
 SLIDER_TRAIN_KEYS = {
     "members_per_step", "level_norm", "min_span", "weight_cap_pct", "backward_per_member", "center_offset",
+    "shared_residual_weight",
     "debug_dump_steps",
     "anchor_strength", "anchor_prompts", "anchor_prob", "anchor_max_multiplier", "anchor_images", "anchor_caption_key",
     "symmetry_strength", "symmetry_prob", "symmetry_max_multiplier",
@@ -62,6 +66,7 @@ class SliderTrainConfig:
     min_span: float = 0.3
     weight_cap_pct: float = 95.0
     backward_per_member: bool = False
+    shared_residual_weight: float = 1.0
     center_offset: float = 0.0
     debug_dump_steps: int = 0
     anchor_strength: float = 0.0
@@ -108,6 +113,7 @@ class SliderTrainConfig:
             min_span=number("min_span", 0.3),
             weight_cap_pct=number("weight_cap_pct", 95.0),
             backward_per_member=bool(raw.get("backward_per_member", False)),
+            shared_residual_weight=number("shared_residual_weight", 1.0),
             center_offset=number("center_offset", 0.0),
             debug_dump_steps=debug,
             anchor_strength=number("anchor_strength", 0.0),
@@ -127,6 +133,8 @@ class SliderTrainConfig:
         )
         if config.level_norm not in LEVEL_NORMS:
             raise ValueError(f"slider.level_norm must be one of {LEVEL_NORMS}, got {config.level_norm!r}")
+        if not 0.0 <= config.shared_residual_weight <= 1.0:
+            raise ValueError("slider.shared_residual_weight must be in [0, 1]")
         if config.min_span < 0:
             raise ValueError("slider.min_span must be >= 0")
         if not 0 < config.weight_cap_pct <= 100:
