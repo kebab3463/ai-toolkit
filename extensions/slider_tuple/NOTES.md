@@ -896,3 +896,23 @@ the trainer now warns).
   (Krea's own schedule; half the steps above sigma 0.76 instead of 0.5) vs our
   `linear`; rank 2 / attention-only; leakage prompts (scenes, people) in the
   sweep; delayed LoRA activation at inference.
+
+### Faster iteration: in-training sweeps, screening length, 512 px check (2026-10-21)
+
+Cost per experiment so far: ~95-140 min training (1000 steps, 5.8-8.3 s/step)
+plus ~35-45 min of separate checkpoint sweeps (model reload, 42 images x 8
+checkpoints), while everything decisive happened by step 500-750.
+
+- **In-training sweeps:** `sweep_grid.py` writes the sweep grid (held-out
+  prompts x seeds x strengths, explicit seed / network_multiplier per sample,
+  PNG) into a config's samples; the Turbo previews then are the sweep (the F7
+  check showed preview and sweep renders identical). `sweep_from_samples.py`
+  measures a run's samples per step into `output/sweeps/<run>/<run>_<step>/`
+  (skips steps already done or still sampling). ~3 min per sample step.
+- **Screening length 750 steps**, sampled every 125.
+- **Scene anchors** to be dropped from screening runs (~1.3 s/step); kept in
+  4c so 4c vs 3b tests lambda alone.
+- **512 px check:** `weight_r4c_shared0.yaml` (1024) and `_512px.yaml` (training
+  at 512, previews at 1024 so both are evaluated identically). If 512 ranks and
+  reads like 1024, screen at 512. Note at 512 the previews (~20 min per run)
+  cost about as much as the training; a smaller grid would then pay off.

@@ -303,6 +303,14 @@ linearity and side effects:
   checkpoints turned bad (NOTES.md, "Run 3").
 - `--resummarize` rewrites the summary and sheets from `sweep.csv` without
   loading models (e.g. after a tooling update).
+- **In-training sweeps (faster; the default for experiments):** make the
+  run's sample previews the sweep grid, so every sample step renders a sweep
+  of that checkpoint on Turbo during training, with no separate sweep job:
+  `scripts/sweep_grid.py CONFIG --prompts held_out.jsonl` (2 prompts x 3 seeds
+  x 7 strengths = 42 images, ~3 min per sample step). After or during
+  training, `scripts/sweep_from_samples.py output/<run> --measure body` writes
+  `output/sweeps/<run>/<run>_<step>/` per sample step for `compare_sweeps.py`.
+  The UI shows the grid live.
 - **Compare runs:** sweep each run with the same prompts, seeds and
   multipliers, then
   `scripts/compare_sweeps.py output/sweeps/run_a output/sweeps/run_b` prints
@@ -402,6 +410,8 @@ Dataset entries take `slider_tuples: <manifest>` with
 | `scripts/measure_tuples.py` | body-width measure of every member; measured levels (§2d) |
 | `scripts/measure_images.py` | measure a folder of frames; pick evenly spaced intermediates per tuple (§2e) |
 | `scripts/slider_sweep.py` | linearity and side-effect sweep on Turbo (§4) |
+| `scripts/sweep_grid.py` | make a config's sample previews a sweep grid (in-training sweeps, §4) |
+| `scripts/sweep_from_samples.py` | sweep tables from a run's sample images, one folder per step (§4) |
 | `scripts/compare_sweeps.py` | per-multiplier tables of several sweeps side by side (§4) |
 | `scripts/image_lpips.py` | LPIPS between images |
 | `scripts/ui_jobs.py` | register configs (and finished runs) as web UI jobs (§3) |

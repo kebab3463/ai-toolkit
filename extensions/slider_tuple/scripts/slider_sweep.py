@@ -60,7 +60,7 @@ def floats(text):
     return [float(x) for x in text.split(",") if x.strip()] if text else []
 
 
-def parse_args():
+def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--model", default="krea/Krea-2-Turbo",
                    help="Krea 2 checkpoint: hub id, folder, .safetensors, or a ComfyUI int8_convrot .safetensors")
@@ -89,7 +89,7 @@ def parse_args():
                    help="only rewrite summary / sheets from an existing <out>/sweep.csv (no models)")
     p.add_argument("--out", required=True)
     p.add_argument("--device", default="cuda:0")
-    args = p.parse_args()
+    args = p.parse_args(argv)
     if args.raw:
         args.steps = args.steps or 25
         args.cfg = 4.0 if args.cfg is None else args.cfg

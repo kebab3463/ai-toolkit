@@ -50,6 +50,36 @@ class SweepRow:
     face_sim: Optional[float] = None
 
 
+def grid_samples(prompts: Sequence[str], seeds: Sequence[int], multipliers: Sequence[float]) -> List[dict]:
+    """A training config's sample list that is a sweep grid: every prompt x seed x multiplier,
+    ordered by prompt, then seed, then multiplier, each with an explicit seed and multiplier."""
+    return [{"prompt": p, "seed": int(s), "network_multiplier": float(m)}
+            for p in prompts for s in seeds for m in sorted(multipliers)]
+
+
+def rows_from_samples(samples: Sequence[dict], paths_by_index: Dict[int, str]) -> List[SweepRow]:
+    """Sweep rows for one sample step: sample i of the config -> its image (paths_by_index[i]).
+    Each sample needs a seed and a multiplier (network_multiplier, or --m in the prompt, which wins
+    as in GenerateImageConfig); prompts are numbered in order of first appearance."""
+    import re
+
+    prompt_ids: Dict[str, int] = {}
+    rows = []
+    for i, sample in enumerate(samples):
+        if i not in paths_by_index:
+            continue
+        prompt = sample.get("prompt") or ""
+        flag = re.search(r"--m\s+(-?[\d.]+)", prompt)
+        text = re.sub(r"\s*--m\s+-?[\d.]+", "", prompt).strip()
+        m = float(flag.group(1)) if flag else sample.get("network_multiplier")
+        if m is None or sample.get("seed") is None:
+            raise ValueError(f"sample {i} ({text[:40]!r}) needs a seed and a multiplier to be a sweep row")
+        prompt_ids.setdefault(text, len(prompt_ids))
+        rows.append(SweepRow(prompt_idx=prompt_ids[text], prompt=text, seed=int(sample["seed"]), m=float(m),
+                             path=paths_by_index[i]))
+    return rows
+
+
 def load_callable(spec: str) -> Callable:
     """'package.module:function' -> the function (the module is imported normally)."""
     if ":" not in spec:
