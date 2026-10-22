@@ -1018,3 +1018,14 @@ across the range (thin / average originals with their own edits, heavier edits
 of thin people) would make the shared content neutral on weight, so the drift
 stops pushing along the slider. Probably more important than the remaining
 training settings.
+
+### Aspect ratio and scale (2026-10-21)
+
+BigLove is tuned for 1024x1536. Training already keeps each image's aspect via
+buckets: the 17 training images are mostly portrait (6 exactly 2:3, most others
+9:16-3:4, 2 square), e.g. 416x624 buckets at 512. The difference is scale:
+`resolution: [1024]` trains 2:3 at ~832x1248 (~1.0 MP) vs BigLove's ~1.6 MP;
+`resolution: [1280]` (~1040x1568) would match, at ~1.8-2x per step, for a final
+run. Previews / sweeps should render 1024x1536 from the next comparison series
+on (`sweep_grid.py --width 1024 --height 1536`, ~1.5x preview cost), with its
+own baseline; not mid-series (rank 2 compares with square previews).

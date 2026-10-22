@@ -18,8 +18,8 @@ Usage (from the repo root):
         --prompts datasets/weight_slider_tuples/held_out.jsonl
     # defaults: --seeds 1000,1001,1002 --multipliers 0,1,2,3,-1,-2,-3 (the sweeps so far)
 
-Cost on Turbo: about 4 s per image, so 42 images (2 prompts x 3 seeds x 7) ~3 min
-per sample step.
+Cost on Turbo: about 4 s per 1024x1024 image, so 42 images (2 prompts x 3 seeds x 7)
+~3 min per sample step; --width 1024 --height 1536 (BigLove's 2:3) costs ~1.5x.
 """
 
 import argparse
@@ -60,7 +60,7 @@ def set_in_block(text: str, block: str, key: str, value: str) -> str:
     return "\n".join(lines)
 
 
-def set_grid(text: str, samples) -> str:
+def set_grid(text: str, samples, width=None, height=None) -> str:
     """The config text with the sample block's prompt list replaced by ``samples`` (png, fixed seeds)."""
     lines = text.split("\n")
     start = next((i for i, l in enumerate(lines) if re.match(r"^\s*sample:\s*$", l)), None)
@@ -95,6 +95,10 @@ def set_grid(text: str, samples) -> str:
 
     set_key("format", '"png"')
     set_key("walk_seed", "false")
+    if width:
+        set_key("width", str(int(width)))
+    if height:
+        set_key("height", str(int(height)))
     grid = [f"{key_indent}# sweep grid (sweep_grid.py): prompt x seed x multiplier",
             f"{key_indent}samples:"]
     grid += [f"{key_indent}  - {{prompt: {json.dumps(s['prompt'])}, seed: {s['seed']}, "
@@ -115,12 +119,14 @@ def main(argv=None):
     p.add_argument("--seeds", default="1000,1001,1002")
     p.add_argument("--multipliers", default="0,1,2,3,-1,-2,-3")
     p.add_argument("--keep-first-sample", action="store_true", help="keep the step-0 preview round")
+    p.add_argument("--width", type=int, help="preview width (e.g. 1024 with --height 1536 for BigLove's 2:3)")
+    p.add_argument("--height", type=int)
     p.add_argument("--out", help="write here instead of editing the config in place")
     args = p.parse_args(argv)
     samples = grid_samples(read_prompts(args.prompts), [int(s) for s in floats(args.seeds)], floats(args.multipliers))
     with open(args.config, encoding="utf-8") as f:
         text = f.read()
-    text = set_grid(text, samples)  # before opening for writing: a failed edit must not truncate the config
+    text = set_grid(text, samples, args.width, args.height)  # before opening for writing: a failed edit must not truncate the config
     if not args.keep_first_sample:
         text = set_in_block(text, "train", "skip_first_sample", "true # step-0 previews are the base model")
     with open(args.out or args.config, "w", encoding="utf-8") as f:
