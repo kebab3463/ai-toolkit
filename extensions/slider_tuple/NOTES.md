@@ -1029,3 +1029,29 @@ buckets: the 17 training images are mostly portrait (6 exactly 2:3, most others
 run. Previews / sweeps should render 1024x1536 from the next comparison series
 on (`sweep_grid.py --width 1024 --height 1536`, ~1.5x preview cost), with its
 own baseline; not mid-series (rank 2 compares with square previews).
+
+### Screens measured: rank 2 less lopsided, shift faster, same ceiling (2026-10-21)
+
+`sweep_from_samples.py` + `compare_sweeps.py --parity` on the 512 screens
+(|m| = 3; 4 images per cell, per-image noise ~0.03-0.05):
+
+| checkpoint | odd | even | even/odd | bg LPIPS +m / -m |
+| --- | --- | --- | --- | --- |
+| baseline (rank 4, no anchors) @310 | +0.121 | +0.065 | 0.54 | 0.22 / 0.11 |
+| baseline @372 | +0.153 | +0.096 | 0.63 | 0.27 / 0.19 |
+| shift @248 | +0.167 | +0.078 | 0.47 | 0.25 / 0.14 |
+| shift @310 | +0.270 | +0.211 | 0.78 | 0.35 / 0.19 |
+| rank 2 @372 | +0.127 | +0.041 | 0.32 | 0.20 / 0.22 |
+
+- Rank 2 learns ~one interval slower (its 372 ~ baseline's 310 in slider
+  strength) with less even drift at matched strength (even/odd ~0.3 vs ~0.5);
+  bg drift similar (+m) or higher (-m). Suggestive, not proven at n = 4.
+  Rank 2 is the screening default from now on.
+- Shift: the same arc, faster, no better ratio (confirms the eyeball read).
+- Same ceiling everywhere: visible breakdown once the odd part reaches
+  ~0.12-0.15 at |m| = 3 (~0.04-0.05 per unit m, under half the data's 0.114
+  per unit). Training settings are close to exhausted on this data; the drift
+  grows with the slider at about the same rate in every variant and pulls
+  heavier. Next effort: data (more tuples across the body-type range, heavier
+  edits of thin people, varied clothing / poses, edit strength checked with the
+  ComfyUI node), then the rank-2 screen again with a 2:3 baseline.
