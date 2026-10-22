@@ -999,3 +999,22 @@ high-frequency, confetti-like speckle in both directions. Training loss rose
   give a cleaner best checkpoint but does not remove the drift (the drift comes
   from the objective). The user plans to use these for polishing a slider that
   already works rather than now.
+
+### Screen: Krea timestep shift = the same arc, faster (2026-10-21)
+
+`weight_s512_shift` vs the baseline (`weight_r3b_rank4_512px_no-anchors`), by
+eye on the previews (beach prompt, seed 1000): clear two-way slider at 186 vs
+248, +3 starts ballooning at 248 vs 310, grotesque with -3 muted at 310 vs 372.
+About one 62-step interval earlier throughout; the best shift checkpoint (186)
+is not visibly better than the baseline's best (248). Krea's schedule speeds up
+learning and breakdown alike, like a higher lr; dropped as a drift fix.
+
+**The breakdown is lopsided in every run:** +3 balloons while -3 only stops
+thinning. Consistent with the even part pulling toward the tuples' common
+content, which for this data means heavier bodies (all originals are at the
+heavy end): on the + side it adds to the slider and runs away, on the - side
+it cancels it. So the data's body-type range is part of the root cause; tuples
+across the range (thin / average originals with their own edits, heavier edits
+of thin people) would make the shared content neutral on weight, so the drift
+stops pushing along the slider. Probably more important than the remaining
+training settings.
