@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from toolkit.network_mixins import ToolkitModuleMixin
+from toolkit.network_mixins import ToolkitModuleMixin, broadcast_and_multiply
 
 from typing import TYPE_CHECKING, Union, List
 
@@ -391,8 +391,15 @@ class LokrModule(ToolkitModuleMixin, nn.Module):
             drop = torch.rand(delta.size(-1), device=delta.device) < self.rank_dropout
             delta = delta * drop.to(delta.dtype)
 
-        multiplier = torch.mean(self.network_ref().torch_multiplier).to(compute_dtype)
-        delta = delta * multiplier
+        # slider_tuple: one multiplier per sample like LoraModule (sliders batch a tuple's members
+        # at +s / -s, whose mean is 0); the mean only when the batch doesn't split evenly
+        multiplier = self.network_ref().torch_multiplier
+        if multiplier.numel() > 1 and delta.size(0) % multiplier.size(0) == 0:
+            if delta.size(0) != multiplier.size(0):
+                multiplier = multiplier.repeat_interleave(delta.size(0) // multiplier.size(0))
+            delta = broadcast_and_multiply(delta, multiplier.to(compute_dtype))
+        else:
+            delta = delta * torch.mean(multiplier).to(compute_dtype)
 
         return (base_out + delta).to(orig_dtype)
 
