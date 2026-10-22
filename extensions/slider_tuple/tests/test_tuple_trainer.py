@@ -281,3 +281,12 @@ def test_startup_warns_about_mismatched_member_masks(tmp_path, capsys):
     make_trainer(tmp_path, manifest)
     out = capsys.readouterr().out
     assert "WARNING 1 tuples mask their members differently: p02" in out
+
+
+def test_warns_about_sdtrainer_options_the_slider_path_skips(tmp_path, capsys):
+    manifest = make_manifest(tmp_path / "data", {"p01": [("after", 1.0), ("before", -1.0)]})
+    trainer, _ = make_trainer(tmp_path, manifest)
+    trainer.train_config.do_differential_guidance = True
+    trainer.warn_unused_train_options()
+    out = capsys.readouterr().out
+    assert "train.do_differential_guidance has no effect" in out and "diff_output_preservation" not in out

@@ -103,6 +103,7 @@ class SliderTupleTrainer(DiffusionTrainer):
             return
         if len(tuple_sets) != len(self.dataset_configs):
             raise ValueError("slider_tuple: tuple datasets cannot be mixed with other datasets in one job")
+        self.warn_unused_train_options()
 
         # a resolution list loads the same manifest more than once; plan each tuple once
         unique: Dict[str, SliderTuple] = {}
@@ -150,6 +151,22 @@ class SliderTupleTrainer(DiffusionTrainer):
                 f"slider_tuple: WARNING center_offset = {cfg.center_offset:g} (test hook): multipliers are no "
                 "longer centered, so content shared by a tuple's members no longer cancels"
             )
+
+    # SDTrainer options applied only in its ordinary loss path (calculate_loss / the non-guided
+    # branch), which tuple datasets never take: (option, what to use instead)
+    UNUSED_TRAIN_OPTIONS = (
+        ("do_differential_guidance", "for an MSE loss it only scales the gradient, which Adam normalizes "
+                                     "away; to weigh the slider loss against anchors / symmetry, change "
+                                     "anchor_strength / symmetry_strength instead"),
+        ("diff_output_preservation", "use slider anchors (anchor_images with captions) for what must not change"),
+        ("blank_prompt_preservation", "use slider anchors or anchor_prompts"),
+    )
+
+    def warn_unused_train_options(self):
+        train_config = getattr(self, "train_config", None)
+        for name, instead in self.UNUSED_TRAIN_OPTIONS:
+            if getattr(train_config, name, False):
+                print_acc(f"slider_tuple: WARNING train.{name} has no effect on slider_tuple datasets; {instead}")
 
     def hook_before_train_loop(self):
         # before super() and before any batch is drawn, so dataloader workers
