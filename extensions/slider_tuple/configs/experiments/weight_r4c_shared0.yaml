@@ -83,6 +83,7 @@ config:
         turbo_preview: "/home/csprunger/.nvme_cache/diffusion_models/Krea2/BigLoveKreaLife2_int8.safetensors" # EDIT
         turbo_preview_offload: true
       train:
+        skip_first_sample: true # step-0 previews are the base model
         batch_size: 1
         steps: 750 # screening length: runs so far decided by step 500-750
         gradient_accumulation: 1

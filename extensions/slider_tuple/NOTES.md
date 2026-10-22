@@ -957,3 +957,27 @@ high-frequency, confetti-like speckle in both directions. Training loss rose
   20-image grid) and `weight_r3b_rank4_512px` (3b exactly, at 512: a check
   against 3b's known 1024 sweeps). `weight_r4c_shared0.yaml` (1024) now uses
   lr 1e-4 so the overnight run doesn't repeat the failure.
+
+### 512 px screening: same dynamics, about twice as fast per step (2026-10-21)
+
+- **lambda 0 mostly removes the slider signal**, not just the drift. 4c at 512
+  with lr 1e-4 (the user's `weight_r4c_shared0_512px_screen_lr1e-4`): practically
+  no change across strengths at step 500; at lr 3e-4 it went from nothing to
+  speckle. Correction to the lambda analysis: the dropped term (shared residual
+  x the members' input difference) is small over the whole image but as large
+  as the kept signal in the body region, the only region where the slider
+  signal lives. What lambda 0 keeps there includes the edits' texture
+  differences. lambda and the symmetry loss are out as drift fixes.
+- **3b at 512** (`weight_r3b_rank4_512px`, 42-image grid): a working two-way
+  slider at step 250 (slimmer at -3, heavier at +3, scene kept); at step 375
+  +2 / +3 balloon and -3 stops thinning (looks fuller than -1 on the beach
+  prompt): 3b's 1024 breakdown, the even part taking over. Time scale: slider
+  ~250 / breakdown ~375 at 512 vs ~500 / ~625-750 at 1024. So 512 reproduces
+  1024's pattern compressed ~2x in steps; screen at 512 with samples and
+  checkpoints every ~62 steps, ~500 steps. Stopped at 375.
+- Correction to an earlier claim: averaged per 100 *steps* (not per 100 logged
+  values; anchors run on about half the steps), 4c-512's anchor loss was
+  ~6e-5 to 9e-5 through step 299 and 2.5e-3 in 300-375. It jumped with the
+  breakdown; it gave no early warning at steps 100-200.
+- `train.skip_first_sample: true` from now on (sweep_grid.py sets it): the
+  step-0 previews are all the base model.

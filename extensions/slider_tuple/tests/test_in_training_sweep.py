@@ -46,6 +46,7 @@ def test_sweep_grid_rewrites_a_real_config(tmp_path):
     assert len(sample["samples"]) == 2 * 3 * 7 and "prompts" not in sample
     assert sample["samples"][0] == {"prompt": 'caption "a" with: colons', "seed": 1000, "network_multiplier": -3.0}
     assert sample["format"] == "png" and sample["walk_seed"] is False and sample["sample_every"] == 250
+    assert yaml.safe_load(text)["config"]["process"][0]["train"]["skip_first_sample"] is True
     script.main([str(config), "--prompts", str(held), "--seeds", "7", "--multipliers", "0,1,-1"])  # idempotent
     assert len(yaml.safe_load(config.read_text())["config"]["process"][0]["sample"]["samples"]) == 2 * 3
 
