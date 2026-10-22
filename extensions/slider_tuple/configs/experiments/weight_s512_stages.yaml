@@ -1,13 +1,13 @@
 # 512 px screen: the baseline (3b at 512, no anchors) with a learning-rate
-# schedule: 250 steps at 3e-4 (the slider appears by ~step 250 at 512), then 250
+# schedule: 248 steps at 3e-4 (the slider appears by ~step 250 at 512), then 248
 # steps from 1e-4 decaying to 0 (cosine) as the drift would start. Expected: the
 # same path as the baseline, slower after 250 and less noisy, so a better landing
 # near the best point; not a fix for the drift itself (NOTES.md). Baseline run:
 # weight_r3b_rank4_512px_no-anchors (same settings, constant lr 3e-4).
 #
 # 512 px screening (NOTES.md, "512 px screening"): 3b's learn-then-break arc
-# (slider ~step 250, breakdown ~375 at 512) sampled every 62 steps for 500
-# steps; 20-image in-training sweep (2 held-out prompts x seeds 1000-1001 x m
+# (slider ~step 250, breakdown ~375 at 512) sampled every 62 steps for 496
+# steps (8 x 62, so the final sample is the last interval); 20-image in-training sweep (2 held-out prompts x seeds 1000-1001 x m
 # in 0, +-1.5, +-3) at 1024 on Turbo; no step-0 previews; no anchors. Compare
 # the three screens with each other (same settings), e.g.:
 #   for r in weight_r3b_rank4_512px_no-anchors weight_s512_stages; do
@@ -62,13 +62,13 @@ config:
       train:
         skip_first_sample: true # step-0 previews are the base model
         batch_size: 1
-        steps: 500 # = the stages' total (the trainer sets it from them)
+        steps: 496 # = the stages' total (the trainer sets it from them); 8 x 62
         # learn at 3e-4 until the slider is there (~step 250 at 512), then decay
         # to 0 over the rest instead of drifting at full speed (scheduling from
         # this fork: each stage switches lr / scheduler at its first step)
         stages:
-          - {name: learn, steps: 250, lr: 3e-4}
-          - {name: settle, steps: 250, lr: 1e-4, lr_scheduler: cosine}
+          - {name: learn, steps: 248, lr: 3e-4}
+          - {name: settle, steps: 248, lr: 1e-4, lr_scheduler: cosine}
         gradient_accumulation: 1
         train_unet: true
         train_text_encoder: false

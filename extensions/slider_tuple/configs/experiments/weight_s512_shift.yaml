@@ -6,8 +6,8 @@
 # this screen tests a milder version of what a 1024 run would use.
 #
 # 512 px screening (NOTES.md, "512 px screening"): 3b's learn-then-break arc
-# (slider ~step 250, breakdown ~375 at 512) sampled every 62 steps for 500
-# steps; 20-image in-training sweep (2 held-out prompts x seeds 1000-1001 x m
+# (slider ~step 250, breakdown ~375 at 512) sampled every 62 steps for 496
+# steps (8 x 62, so the final sample is the last interval); 20-image in-training sweep (2 held-out prompts x seeds 1000-1001 x m
 # in 0, +-1.5, +-3) at 1024 on Turbo; no step-0 previews; no anchors. Compare
 # the three screens with each other (same settings), e.g.:
 #   for r in weight_s512_base weight_s512_rank2 weight_s512_shift; do
@@ -62,7 +62,7 @@ config:
       train:
         skip_first_sample: true # step-0 previews are the base model
         batch_size: 1
-        steps: 500
+        steps: 496 # 8 x 62: the final sample / save lands on the last interval
         gradient_accumulation: 1
         train_unet: true
         train_text_encoder: false
