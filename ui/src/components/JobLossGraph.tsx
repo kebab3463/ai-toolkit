@@ -2,7 +2,7 @@
 
 import { Job } from '@prisma/client';
 import type { JobConfig } from '@/types';
-import useJobLossLog, { LossPoint } from '@/hooks/useJobLossLog';
+import useJobLossLog, { LossPoint, LossSeries, toPoints } from '@/hooks/useJobLossLog';
 import { useMemo, useState, useEffect, useCallback, useRef } from 'react';
 import {
   ResponsiveContainer,
@@ -334,7 +334,7 @@ export default function JobLossGraph({ job }: Props) {
   }, [showAuxWd, showAuxGradPre, showAuxGradPost, showGradAgg, gradPctCharts]);
 
   const gradNormPairs = useMemo(
-    () => alignGradNormPairs(series['grad_norm_pre'] ?? [], series['grad_norm_post'] ?? []),
+    () => alignGradNormPairs(toPoints(series['grad_norm_pre']), toPoints(series['grad_norm_post'])),
     [series],
   );
 
@@ -435,7 +435,16 @@ export default function JobLossGraph({ job }: Props) {
     });
   }, [lossKeys]);
 
-  const activeKeys = useMemo(() => lossKeys.filter(k => enabled[k] !== false), [lossKeys, enabled]);
+  // Keys not yet in `enabled` (data and keys now arrive in the same render,
+  // before the sync effect above has run) take their default here rather than
+  // rendering as enabled and getting pruned a frame later.
+  const activeKeys = useMemo(
+    () =>
+      lossKeys.filter(
+        k => enabled[k] ?? persistedEnabledRef.current?.[k] ?? (k === 'loss/loss' || k === 'val/loss'),
+      ),
+    [lossKeys, enabled],
+  );
 
   // Assign palette slots by position in the (sorted) lossKeys list rather than
   // by hashing the key name — hashing let different keys collide onto the same
@@ -459,11 +468,11 @@ export default function JobLossGraph({ job }: Props) {
     // Union of all steps across active series.
     const stepSet = new Set<number>();
     for (const key of activeKeys) {
-      const pts: LossPoint[] = series[key] ?? [];
-      for (const p of pts) {
-        if (p.value === null || !Number.isFinite(p.value as number)) continue;
-        if (useLogScale && (p.value as number) <= 0) continue;
-        stepSet.add(p.step);
+      const s: LossSeries | undefined = series[key];
+      if (!s) continue;
+      for (let i = 0; i < s.steps.length; i++) {
+        if (useLogScale && s.values[i] <= 0) continue;
+        stepSet.add(s.steps[i]);
       }
     }
     let xs = Array.from(stepSet).sort((a, b) => a - b);
@@ -493,13 +502,13 @@ export default function JobLossGraph({ job }: Props) {
     for (let ki = 0; ki < activeKeys.length; ki++) {
       const key = activeKeys[ki];
       const scaleKey = `y::${key}`;
-      const pts: LossPoint[] = series[key] ?? [];
+      const s: LossSeries = series[key] ?? { steps: [], values: [] };
       const map = new Map<number, number>();
-      for (const p of pts) {
-        if (p.value === null || !Number.isFinite(p.value as number)) continue;
-        if (useLogScale && (p.value as number) <= 0) continue;
-        if (!xsSet.has(p.step)) continue;
-        map.set(p.step, p.value as number);
+      for (let i = 0; i < s.steps.length; i++) {
+        const v = s.values[i];
+        if (useLogScale && v <= 0) continue;
+        if (!xsSet.has(s.steps[i])) continue;
+        map.set(s.steps[i], v);
       }
       const raw: (number | null)[] = xs.map(s => (map.has(s) ? (map.get(s) as number) : null));
       // Metrics logged less often than every step are null at most x positions.
@@ -580,7 +589,7 @@ export default function JobLossGraph({ job }: Props) {
 
     // Optional learning-rate overlay (separate y-scale, min–max in view, no tick labels).
     if (showAuxLr) {
-      const lrPts: LossPoint[] = series['learning_rate'] ?? [];
+      const lrPts: LossPoint[] = toPoints(series['learning_rate']);
       const lrMap = new Map<number, number>();
       for (const p of lrPts) {
         if (p.value === null || !Number.isFinite(p.value as number)) continue;
@@ -1050,7 +1059,7 @@ export default function JobLossGraph({ job }: Props) {
         {auxChartsToShow.length > 0 && (
           <div className="grid grid-cols-1 gap-4">
             {auxChartsToShow.map(opt => {
-              const pts = downsampleAuxPoints(series[opt.key] ?? [], plotStride);
+              const pts = downsampleAuxPoints(toPoints(series[opt.key]), plotStride);
               const hasAux = pts.length > 0;
               return (
                 <div

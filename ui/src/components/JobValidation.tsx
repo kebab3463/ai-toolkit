@@ -150,7 +150,6 @@ export default function JobValidation({ job }: { job: Job }) {
   const [mode, setMode] = useState<CompareMode>('absolute');
   const [noiseIndex, setNoiseIndex] = useState(0);
   const [trainPoints, setTrainPoints] = useState<{ step: number; value: number }[]>([]);
-  const trainKeyRef = useRef<string | null>(null);
   const trainSinceRef = useRef<number | null>(null);
   // checkpoint table: stays scrolled to the newest step unless the user scrolled up
   const ckptScrollRef = useRef<HTMLDivElement | null>(null);
@@ -169,22 +168,26 @@ export default function JobValidation({ job }: { job: Job }) {
     [job.id],
   );
 
-  // training loss (loss_log.db), fetched incrementally, for the chart's per-interval averages
+  // training loss (loss_log.db), fetched incrementally, for the chart's per-interval averages.
+  // The loss route returns every key at once: {keys, series: {key: {steps, values}}}
   usePollLoop(
     async () => {
       try {
-        if (trainKeyRef.current === null) {
-          const res = await apiClient.get(`/api/jobs/${job.id}/loss`, { params: { limit: 1 } });
-          const keys: string[] = res.data?.keys ?? [];
-          trainKeyRef.current = keys.includes('loss/loss') ? 'loss/loss' : keys.includes('loss') ? 'loss' : '';
-        }
-        if (!trainKeyRef.current) return;
-        const params: Record<string, string | number> = { key: trainKeyRef.current, limit: 20000 };
+        const params: Record<string, number> = {};
         if (trainSinceRef.current !== null) params.since_step = trainSinceRef.current;
         const res = await apiClient.get(`/api/jobs/${job.id}/loss`, { params });
-        const pts = ((res.data?.points ?? []) as { step: number; value: number | null }[]).filter(
-          p => p.value !== null && Number.isFinite(p.value),
-        ) as { step: number; value: number }[];
+        const keys: string[] = res.data?.keys ?? [];
+        const k = keys.includes('loss/loss') ? 'loss/loss' : keys.includes('loss') ? 'loss' : null;
+        const ser = k ? res.data?.series?.[k] : null;
+        if (!ser) return;
+        const last = trainSinceRef.current;
+        const pts: { step: number; value: number }[] = [];
+        for (let i = 0; i < Math.min(ser.steps.length, ser.values.length); i++) {
+          const v = ser.values[i];
+          if (v === null || !Number.isFinite(v)) continue;
+          if (last !== null && ser.steps[i] <= last) continue; // the route may resend the boundary step
+          pts.push({ step: ser.steps[i], value: v });
+        }
         if (pts.length) {
           trainSinceRef.current = pts[pts.length - 1].step;
           setTrainPoints(prev => [...prev, ...pts]);

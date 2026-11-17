@@ -361,6 +361,7 @@ class BaseSDTrainProcess(BaseTrainProcess):
                 guidance_scale=sample_item.guidance_scale,
                 guidance_rescale=sample_config.guidance_rescale,
                 num_inference_steps=sample_item.sample_steps,
+                sigmas=sample_item.sigmas,
                 network_multiplier=sample_item.network_multiplier,
                 output_path=output_path,
                 output_ext=sample_config.ext,
@@ -1296,22 +1297,18 @@ class BaseSDTrainProcess(BaseTrainProcess):
         return sigma
     
     def get_optimal_noise(self, latents, dtype=torch.float32):
-        batch_num = latents.shape[0]
-        chunks = torch.chunk(latents, batch_num, dim=0)
-        noise_chunks = []
-        for chunk in chunks:
-            noise_samples = [torch.randn_like(chunk, device=chunk.device, dtype=dtype) for _ in range(self.train_config.optimal_noise_pairing_samples)]
-            # find the one most similar to the chunk
-            lowest_loss = 999999999999
-            best_noise = None
-            for noise in noise_samples:
-                loss = torch.nn.functional.mse_loss(chunk, noise)
-                if loss < lowest_loss:
-                    lowest_loss = loss
-                    best_noise = noise
-            noise_chunks.append(best_noise)
-        noise = torch.cat(noise_chunks, dim=0)
-        return noise
+        # same distribution as keeping the best aligned of N noises, from one draw
+        num_candidates = self.train_config.optimal_noise_pairing_samples
+        noise = torch.randn_like(latents, dtype=dtype)
+        # one pick per channel
+        group_dims = tuple(range(2, latents.dim()))
+        float_latents = latents.float()
+        # clamp so an all zero latent gets plain noise instead of nan
+        latent_direction = float_latents / torch.linalg.vector_norm(float_latents, dim=group_dims, keepdim=True).clamp_min(1e-8)
+        current_alignment = (noise.float() * latent_direction).sum(dim=group_dims, keepdim=True)
+        best_alignment = torch.randn(*current_alignment.shape, num_candidates, device=latents.device).amax(dim=-1)
+        correction = (best_alignment - current_alignment) * latent_direction
+        return noise + correction.to(dtype)
     
     def get_consistent_noise(self, latents, batch: 'DataLoaderBatchDTO', dtype=torch.float32):
         batch_num = latents.shape[0]
@@ -1567,7 +1564,16 @@ class BaseSDTrainProcess(BaseTrainProcess):
                 if is_reg:
                     content_or_style = self.train_config.content_or_style_reg
 
-                if self.train_config.timestep_type in ['two_step', 'four_step', 'eight_step']:
+                if getattr(self.sd.noise_scheduler, 'fixed_train_sigmas', None) is not None:
+                    # the scheduler's timesteps are the model's own sampling schedule
+                    timestep_indices = torch.randint(
+                        0,
+                        len(self.sd.noise_scheduler.timesteps),
+                        (batch_size,),
+                        device=self.device_torch
+                    )
+                    timestep_indices = timestep_indices.long()
+                elif self.train_config.timestep_type in ['two_step', 'four_step', 'eight_step']:
                     if self.train_config.timestep_type == 'two_step':
                         indice_choices = [0, 499]
                     elif self.train_config.timestep_type == 'four_step':
@@ -2690,6 +2696,16 @@ class BaseSDTrainProcess(BaseTrainProcess):
                 self.datasets_reg, self.train_config.batch_size, self.sd,
                 pool_datasets=self.train_config.pool_datasets,
             )
+
+        # a fresh text-embedding cache leaves the text encoder on the gpu (the
+        # datasets don't restore placement: that would bounce it per dataset).
+        # Park it once here, before accelerator.prepare brings the unet up.
+        if (
+            self.is_caching_text_embeddings
+            and self.model_config.low_vram
+            and self.sd.text_encoder is not None
+        ):
+            self.sd.text_encoder_to('cpu')
 
         flush()
         self.last_save_step = self.step_num

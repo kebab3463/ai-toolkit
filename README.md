@@ -42,6 +42,7 @@ AI Toolkit is an easy to use all in one training suite for diffusion models. I t
 - [microsoft/Mage-Flow-Base](https://huggingface.co/microsoft/Mage-Flow-Base) (Mage-Flow)
 - [OpenMOSS-Team/MOSS-Image-SFT](https://huggingface.co/OpenMOSS-Team/MOSS-Image-SFT) (MOSS-Image SFT)
 - [OpenMOSS-Team/MOSS-Image-Base](https://huggingface.co/OpenMOSS-Team/MOSS-Image-Base) (MOSS-Image Base)
+- [briaai/Fibo-2.0-dev](https://huggingface.co/briaai/Fibo-2.0-dev) (Fibo 2.0 Dev)
 
 ### Instruction / Edit
 - [black-forest-labs/FLUX.1-Kontext-dev](https://huggingface.co/black-forest-labs/FLUX.1-Kontext-dev) (FLUX.1-Kontext-dev)
@@ -55,6 +56,8 @@ AI Toolkit is an easy to use all in one training suite for diffusion models. I t
 - [krea/Krea-2-Raw](https://huggingface.co/krea/Krea-2-Raw) (Krea 2 Edit Training)
 - [krea/Krea-2-Turbo](https://huggingface.co/krea/Krea-2-Turbo) (Krea 2 Turbo Edit Training)
 - [microsoft/Mage-Flow-Edit-Base](https://huggingface.co/microsoft/Mage-Flow-Edit-Base) (Mage-Flow Edit)
+- [PrunaAI/P-H3-Image](https://huggingface.co/PrunaAI/P-H3-Image) (P-H3-Image) - text-to-image and editing with up to 8 reference images; it edits when your dataset has control images
+- [MiniMaxAI/MiniMax-H3-Image](https://huggingface.co/MiniMaxAI/MiniMax-H3-Image) (MiniMax-H3-Image) - text-to-image and editing with reference images; it edits when your dataset has control images
 
 ### Video
 - [Wan-AI/Wan2.1-T2V-1.3B-Diffusers](https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B-Diffusers) (Wan 2.1 1.3B)

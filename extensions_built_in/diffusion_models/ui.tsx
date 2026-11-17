@@ -12,6 +12,22 @@ import {
 const defaultNameOrPath = "";
 const defaultLinearRank = 32;
 
+// MOSS-Image edit LoRAs need the companion custom nodes in ComfyUI
+const mossImageEditNotes = (
+  <p>
+    Using these LoRAs in ComfyUI requires{" "}
+    <a
+      href="https://github.com/ostris/ComfyUI-MOSS-Image-Ostris-Edit"
+      target="_blank"
+      rel="noopener noreferrer"
+      className="text-blue-400 hover:text-blue-300 underline"
+    >
+      ComfyUI-MOSS-Image-Ostris-Edit
+    </a>
+    .
+  </p>
+);
+
 // Qwen-Image-2.1 and its turbo distill share the RGBA VAE, so both entries
 // carry this option
 const qwenImage21TransparencyOption: CustomModelOption[] = [
@@ -1457,6 +1473,415 @@ export const AI_TOOLKIT_UI_MODELS: ModelArch[] = [
     ),
   },
   {
+    name: "p_h3_image",
+    label: "PrunaAI P-H3-Image",
+    group: "image",
+    defaults: {
+      // default updates when [selected, unselected] in the UI
+      "config.process[0].model.name_or_path": [
+        "PrunaAI/P-H3-Image-Comfy",
+        defaultNameOrPath,
+      ],
+      // the comfy files are pre-quantized int8 ConvRot (DiT, text encoder, VAE);
+      // convrot8 keeps them as shipped, any other qtype picks the bf16 files
+      "config.process[0].model.quantize": [true, false],
+      "config.process[0].model.qtype": ["convrot8", "qfloat8"],
+      "config.process[0].model.quantize_te": [true, false],
+      "config.process[0].model.qtype_te": ["convrot8", "qfloat8"],
+      "config.process[0].model.low_vram": [true, false],
+      "config.process[0].sample.sampler": ["flowmatch", "flowmatch"],
+      "config.process[0].train.noise_scheduler": ["flowmatch", "flowmatch"],
+      "config.process[0].train.cache_text_embeddings": [true, false],
+      "config.process[0].model.assistant_lora_path": [
+        "ostris/minimax_h3_training_adapter/p_h3_image_training_adapter_v1.safetensors",
+        undefined,
+      ],
+      "config.process[0].network.linear": [16, defaultLinearRank],
+      "config.process[0].network.linear_alpha": [16, defaultLinearRank],
+      "config.process[0].network.network_kwargs.ignore_if_contains": [
+        ["adaln_proj"],
+        [],
+      ],
+      "config.process[0].sample.width": [2048, 1024],
+      "config.process[0].sample.height": [2048, 1024],
+      "config.process[0].sample.guidance_scale": [1, 4],
+      "config.process[0].sample.sample_steps": [8, 25],
+      "config.process[0].train.timestep_type": ["shift", "sigmoid"],
+      "config.process[0].datasets[x].cache_latents_to_disk": [true, false],
+    },
+    disableSections: ["network.conv"],
+    additionalSections: [
+      "datasets.multi_control_paths",
+      "sample.multi_ctrl_imgs",
+      "model.low_vram",
+      "model.layer_offloading",
+      "model.assistant_lora_path",
+    ],
+    modelNotes: (
+      <div className="space-y-2">
+        <p>
+          P-H3-Image is PrunaAI&apos;s MiniMax-H3 fine-tune for text-to-image
+          and image editing: 8 steps, no CFG, up to 8 input images. Without
+          control images it trains and samples as text-to-image. With control
+          images the first is the image being edited and the rest are
+          references (<code>&lt;Picture 1&gt;</code>,{" "}
+          <code>&lt;Picture 2&gt;</code>, ...): each rides into the packed
+          sequence as a reference block, scaled down (never up) to the target
+          canvas area with its own aspect, and is shown to the Qwen3-VL-4B
+          conditioner at 1 MP. Captions that come with references get{" "}
+          <code>Edit &lt;Picture 1&gt;.</code> in front unless they already
+          name the picture to edit (set{" "}
+          <code>model_kwargs.edit_prompt_prefix: false</code> to turn that
+          off). Sample ctrl images work the same way.
+        </p>
+        <p>
+          Weights load from the{" "}
+          <Link href="/settings" className="text-blue-400 hover:underline">
+            Models Folder Path
+          </Link>{" "}
+          in the ComfyUI layout; anything missing is downloaded there from{" "}
+          <code>PrunaAI/P-H3-Image-Comfy</code> (~30GB for the int8 set). Files
+          used with the default quantization:
+        </p>
+        <pre className="bg-gray-900 border border-gray-700 rounded-lg p-3 text-xs overflow-x-auto">
+          <code>{`<MODELS_PATH>/
+├── diffusion_models/
+│   └── p-h3-image_int8_convrot.safetensors
+├── text_encoders/
+│   └── p-h3-image_text_encoder_int8_convrot.safetensors
+└── vae/
+    └── p-h3-image_vae_int8_convrot.safetensors`}</code>
+        </pre>
+        <p>
+          The DiT is the pruned MiniMax-H3 with Pruna&apos;s LoRA merged in, so
+          the default <code>convrot8</code> qtypes load the int8 files as
+          shipped; any other qtype picks the bf16 files and quantizes them. The
+          model samples on its own 8-step sigma grid — keep sample steps at 8
+          and guidance scale at 1. The model is step and guidance distilled, so
+          training runs with the P-H3-Image training adapter (
+          <code>p_h3_image_training_adapter_v1</code>) as a live assistant
+          LoRA by default; the sampler turns it off for previews. It is
+          trained for 8 MP output (2912×2912,
+          3360×2496, ...) with 4 MP acceptable for edits; lower resolutions
+          show more artifacts. Audio and video are not supported.
+        </p>
+      </div>
+    ),
+  },
+  {
+    name: "minimax_h3_image",
+    label: "MiniMax-H3-Image",
+    group: "image",
+    defaults: {
+      // default updates when [selected, unselected] in the UI
+      "config.process[0].model.name_or_path": [
+        "Comfy-Org/MiniMax-H3-Image",
+        defaultNameOrPath,
+      ],
+      // pre-quantized weights: matching qtypes keep the load unchanged
+      "config.process[0].model.quantize": [true, false],
+      "config.process[0].model.qtype": ["convrot8", "qfloat8"],
+      "config.process[0].model.quantize_te": [true, false],
+      "config.process[0].model.qtype_te": ["nvfp4", "qfloat8"],
+      "config.process[0].model.low_vram": [false, false],
+      "config.process[0].sample.sampler": ["flowmatch", "flowmatch"],
+      "config.process[0].train.noise_scheduler": ["flowmatch", "flowmatch"],
+      "config.process[0].train.cache_text_embeddings": [true, false],
+      "config.process[0].model.assistant_lora_path": [
+        "ostris/minimax_h3_training_adapter/minimax_h3_image_training_adapter_v1.safetensors",
+        undefined,
+      ],
+      "config.process[0].network.linear": [16, defaultLinearRank],
+      "config.process[0].network.linear_alpha": [16, defaultLinearRank],
+      "config.process[0].network.network_kwargs.ignore_if_contains": [
+        ["adaln_proj"],
+        [],
+      ],
+      "config.process[0].sample.width": [2048, 1024],
+      "config.process[0].sample.height": [2048, 1024],
+      "config.process[0].sample.guidance_scale": [1, 4],
+      "config.process[0].sample.sample_steps": [6, 25],
+      "config.process[0].train.timestep_type": ["shift", "sigmoid"],
+      "config.process[0].datasets[x].cache_latents_to_disk": [true, false],
+    },
+    disableSections: ["network.conv"],
+    additionalSections: [
+      "datasets.multi_control_paths",
+      "sample.multi_ctrl_imgs",
+      "model.low_vram",
+      "model.layer_offloading",
+      "model.assistant_lora_path",
+    ],
+    modelNotes: (
+      <div className="space-y-2">
+        <p>
+          MiniMax-H3-Image is the MiniMax-H3 DiT without its audio stream,
+          distilled to 6 steps with no CFG, for text-to-image and image
+          editing. Without control images it trains and samples as
+          text-to-image. With control images each one is a reference the
+          prompt names as <code>&lt;Picture 1&gt;</code>,{" "}
+          <code>&lt;Picture 2&gt;</code>, ...: it rides into the packed
+          sequence as a reference block and is shown to the Qwen3-VL
+          conditioner at a 1024 short edge. References keep their own size
+          instead of following the target: the encoded copy has its short
+          edge inside 1024 to 2048 (
+          <code>model_kwargs.reference_min_short_edge</code> /{" "}
+          <code>reference_max_short_edge</code>). Sample ctrl images work the
+          same way. The prompt is used as written, so describe the whole
+          image in detail.
+        </p>
+        <p>
+          Weights load from the{" "}
+          <Link href="/settings" className="text-blue-400 hover:underline">
+            Models Folder Path
+          </Link>{" "}
+          in the ComfyUI layout; anything missing is downloaded there from{" "}
+          <code>Comfy-Org/MiniMax-H3-Image</code> (~38GB for the default set).
+          The text encoder is the MiniMax-H3 one, so an existing copy is
+          reused. Files used with the default quantization:
+        </p>
+        <pre className="bg-gray-900 border border-gray-700 rounded-lg p-3 text-xs overflow-x-auto">
+          <code>{`<MODELS_PATH>/
+├── diffusion_models/
+│   └── minimax_h3_image_pruned_int8_convrot.safetensors
+├── text_encoders/
+│   └── qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors
+└── vae/
+    └── minimax_h3_image_vae_fp16.safetensors`}</code>
+        </pre>
+        <p>
+          The default qtypes load those files as shipped. Transformer qtype{" "}
+          <code>convrotw4a8</code> loads the 4-bit{" "}
+          <code>minimax_h3_image_pruned_w4a8</code> file, text encoder qtype{" "}
+          <code>convrot8</code> the int8 text encoder, and any other
+          transformer qtype quantizes the bf16 file. The transformer has one
+          output head per sampling step on its own 6-step sigma grid, so keep
+          sample steps at 6 and guidance scale at 1. Training draws only
+          those six sampling timesteps, each through its own head, so the
+          Timestep Type setting has no effect. It is trained for 4 MP
+          to 20 MP output (2048×2048 up to 4096×4096, 5472×3072, ...); lower
+          resolutions show more artifacts. The model is step and guidance
+          distilled, so training runs with the MiniMax-H3-Image training
+          adapter (<code>minimax_h3_image_training_adapter_v1</code>) as a
+          live assistant LoRA by default; the sampler turns it off for
+          previews. Audio and video are not supported.
+        </p>
+      </div>
+    ),
+  },
+  {
+    name: "minimax_h3_omni",
+    label: "FastH3 Omni",
+    group: "video",
+    isVideoModel: true,
+    defaults: {
+      // default updates when [selected, unselected] in the UI
+      "config.process[0].model.name_or_path": [
+        "FastVideo/FastH3-Omni-Comfy",
+        defaultNameOrPath,
+      ],
+      // pre-quantized weights: matching qtypes keep the load unchanged
+      "config.process[0].model.quantize": [true, false],
+      "config.process[0].model.qtype": ["convrot8", "qfloat8"],
+      "config.process[0].model.quantize_te": [true, false],
+      "config.process[0].model.qtype_te": ["nvfp4", "qfloat8"],
+      "config.process[0].model.low_vram": [true, false],
+      "config.process[0].sample.sampler": ["flowmatch", "flowmatch"],
+      "config.process[0].train.noise_scheduler": ["flowmatch", "flowmatch"],
+      "config.process[0].train.cache_text_embeddings": [true, false],
+      "config.process[0].model.assistant_lora_path": [
+        "ostris/minimax_h3_training_adapter/fastvideo_fasth3_omni_training_adapter_v1.safetensors",
+        undefined,
+      ],
+      "config.process[0].network.linear": [16, defaultLinearRank],
+      "config.process[0].network.linear_alpha": [16, defaultLinearRank],
+      "config.process[0].network.network_kwargs.ignore_if_contains": [
+        ["adaln_proj"],
+        [],
+      ],
+      "config.process[0].sample.num_frames": [107, 1],
+      "config.process[0].sample.fps": [24, 1],
+      "config.process[0].sample.width": [768, 1024],
+      "config.process[0].sample.height": [768, 1024],
+      "config.process[0].sample.guidance_scale": [1, 4],
+      "config.process[0].sample.sample_steps": [8, 25],
+      "config.process[0].train.audio_loss_multiplier": [1.0, undefined],
+      "config.process[0].train.timestep_type": ["shift", "sigmoid"],
+      "config.process[0].datasets[x].do_audio": [true, undefined],
+      "config.process[0].datasets[x].cache_latents_to_disk": [true, false],
+      "config.process[0].datasets[x].fps": [24, undefined],
+      "config.process[0].datasets[x].num_frames": [39, undefined],
+      "config.process[0].datasets[x].auto_frame_count": [true, undefined],
+    },
+    disableSections: ["network.conv"],
+    additionalSections: [
+      "sample.multi_ctrl_imgs",
+      "datasets.multi_control_paths",
+      "datasets.num_frames",
+      "model.layer_offloading",
+      "model.low_vram",
+      "datasets.do_audio",
+      "datasets.audio_normalize",
+      "datasets.audio_preserve_pitch",
+      "train.audio_loss_multiplier",
+      "datasets.auto_frame_count",
+      "model.assistant_lora_path",
+    ],
+    customModelSelectOptions: [
+      {
+        label: "Distillation Handling Method",
+        options: [
+          { value: "ta", label: "Training Adapter (default)" },
+          { value: "dopsd", label: "D-OPSD" },
+          { value: "none", label: "None" },
+        ],
+        getValue: (config: JobConfig) => {
+          if (config?.config?.process?.[0]?.model?.model_kwargs?.dopsd) {
+            return "dopsd";
+          }
+          const assistantLoraPath =
+            config?.config?.process?.[0]?.model?.assistant_lora_path;
+          return assistantLoraPath && assistantLoraPath.trim() !== ""
+            ? "ta"
+            : "none";
+        },
+        onChange: (
+          value: string,
+          config: JobConfig,
+          setJobConfig: (value: any, key: string) => void,
+        ) => {
+          const kwargs = {
+            ...(config?.config?.process?.[0]?.model?.model_kwargs ?? {}),
+          };
+          if (value === "dopsd") {
+            kwargs.dopsd = true;
+            kwargs.dopsd_bleed_strength = 1.0;
+          } else {
+            delete kwargs.dopsd;
+            delete kwargs.dopsd_bleed_strength;
+          }
+          setJobConfig(kwargs, "config.process[0].model.model_kwargs");
+          setJobConfig(
+            value === "ta"
+              ? "ostris/minimax_h3_training_adapter/fastvideo_fasth3_omni_training_adapter_v1.safetensors"
+              : undefined,
+            "config.process[0].model.assistant_lora_path",
+          );
+        },
+        doc: {
+          title: "FastH3 Omni Distillation Handling",
+          description: (
+            <div>
+              FastH3 Omni is a step-distilled model, so training on it directly
+              will make the distillation break down. The Training Adapter (the
+              MiniMax-H3 Ref2V adapter) absorbs that drift during training and
+              is removed at inference, but can still break down over a long
+              run. D-OPSD instead self-distills: a no-grad teacher pass sees the
+              training target as its own reference and its prediction becomes
+              the training target for a reference-free pass, baking the
+              reference into your trigger word (or the caption itself when no
+              trigger word is set). Re-caches latents with pixel tensors.
+            </div>
+          ),
+        },
+      },
+      {
+        label: "Image Reference Presentation",
+        options: [
+          { value: "picture", label: "Picture (default)" },
+          { value: "video", label: "Static video clip" },
+        ],
+        getValue: (config: JobConfig) => {
+          return config?.config?.process?.[0]?.model?.model_kwargs
+            ?.image_refs_as_video
+            ? "video"
+            : "picture";
+        },
+        onChange: (
+          value: string,
+          config: JobConfig,
+          setJobConfig: (value: any, key: string) => void,
+        ) => {
+          const kwargs = {
+            ...(config?.config?.process?.[0]?.model?.model_kwargs ?? {}),
+          };
+          if (value === "video") {
+            kwargs.image_refs_as_video = true;
+          } else {
+            delete kwargs.image_refs_as_video;
+            delete kwargs.image_ref_video_frames;
+          }
+          setJobConfig(kwargs, "config.process[0].model.model_kwargs");
+        },
+        doc: {
+          title: "MiniMax-H3 Image Reference Presentation",
+          description: (
+            <div className="space-y-2">
+              <p>
+                How still-image references (dataset control images and sample
+                ctrl images) are shown to the model. Video references always use
+                the video path.
+              </p>
+              <p>
+                <strong>Picture</strong>: the native ref2va recipe — a
+                single-frame reference block, shown to Qwen3-VL as a{" "}
+                <code>&lt;Picture i&gt;</code> block, scaled down only.
+              </p>
+              <p>
+                <strong>Static video clip</strong>: the image is held for 5
+                frames (2 latent frames) and routed through the exact path a
+                reference VIDEO takes — video sizing (matched to the target's
+                pixel area), multi-frame reference block,{" "}
+                <code>&lt;Video k&gt;</code> timestamped presentation. Use this
+                when training on image references but sampling with video
+                references, so the LoRA learns the pathway it will be used
+                through. Adds a handful of rows per reference. Frame count is
+                adjustable with <code>model_kwargs.image_ref_video_frames</code>{" "}
+                (17n+5). Changing this re-caches text embeddings.
+              </p>
+            </div>
+          ),
+        },
+      },
+    ],
+    modelNotes: (
+      <div className="space-y-2">
+        <p>
+          FastVideo&apos;s FastH3 Omni: MiniMax-H3 Ref2V distilled to 8 steps.
+          References work exactly like MiniMax-H3 Ref2V: control images and
+          videos condition the output as subject/style references (never as a
+          first frame), from the dataset control path(s) in training and the
+          sample ctrl images in sampling.
+        </p>
+        <p>
+          Weights load from the{" "}
+          <Link href="/settings" className="text-blue-400 hover:underline">
+            Models Folder Path
+          </Link>{" "}
+          set in settings. Anything missing is downloaded there from{" "}
+          <code>FastVideo/FastH3-Omni-Comfy</code> on first load. The text
+          encoder and VAEs are the same files MiniMax-H3 uses, so an existing
+          MiniMax-H3 setup only needs the new DiT. Files used:
+        </p>
+        <pre className="bg-gray-900 border border-gray-700 rounded-lg p-3 text-xs overflow-x-auto">
+          <code>{`<MODELS_PATH>/
+├── diffusion_models/
+│   └── fasth3_omniref_8step_pruned_int8_convrot.safetensors
+├── text_encoders/
+│   └── qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors
+└── vae/
+    ├── minimax_h3_video_vae_fp16.safetensors
+    └── minimax_h3_audio_vae_fp32.safetensors`}</code>
+        </pre>
+        <p>
+          Sample with 8 steps and guidance scale 1 (the trained schedule).
+          Attention runs dense, like native ComfyUI. Video is fixed 24 fps and
+          frame counts snap down to the 17n+5 grid.
+        </p>
+      </div>
+    ),
+  },
+  {
     name: "minimax_h3_vsa",
     label: "FastH3 8-Step V2",
     group: "video",
@@ -1840,6 +2265,160 @@ export const AI_TOOLKIT_UI_MODELS: ModelArch[] = [
     },
     disableSections: ["network.conv"],
     additionalSections: ["model.layer_offloading", "model.low_vram"],
+  },
+  {
+    name: "moss_image:edit",
+    label: "MOSS-Image SFT [Edit Training]",
+    generateNameOverride: "MOSS-Image SFT Edit",
+    group: "experimental",
+    modelNotes: mossImageEditNotes,
+    defaults: {
+      // default updates when [selected, unselected] in the UI
+      "config.process[0].model.name_or_path": [
+        "OpenMOSS-Team/MOSS-Image-SFT",
+        defaultNameOrPath,
+      ],
+      "config.process[0].model.quantize": [true, false],
+      "config.process[0].model.qtype": ["convrot8", "qfloat8"],
+      // Qwen3.5-9B text encoder + vision tower (references ride in the prompt)
+      "config.process[0].model.quantize_te": [true, false],
+      "config.process[0].model.qtype_te": ["convrot8", "qfloat8"],
+      "config.process[0].model.low_vram": [true, false],
+      // prompt embeds depend on the control images, so the TE stays loaded
+      "config.process[0].train.unload_text_encoder": [false, false],
+      "config.process[0].sample.sampler": ["flowmatch", "flowmatch"],
+      "config.process[0].train.noise_scheduler": ["flowmatch", "flowmatch"],
+      "config.process[0].sample.width": [1024, 1024],
+      "config.process[0].sample.height": [1024, 1024],
+      "config.process[0].sample.guidance_scale": [3, 4],
+      "config.process[0].sample.sample_steps": [30, 25],
+      "config.process[0].train.timestep_type": ["shift", "sigmoid"],
+      // edit: references as clean t=0 latents + in the prompt; kv_cache:
+      // references attend only to themselves, so sampling computes their K/V
+      // once (must be trained that way)
+      "config.process[0].model.model_kwargs": [
+        {
+          edit: true,
+          kv_cache: true,
+          match_target_res: true,
+          uncond_skip_layers: [22],
+        },
+        {},
+      ],
+      "config.process[0].network.network_kwargs.ignore_if_contains": [
+        ["layers.22."],
+        [],
+      ],
+    },
+    disableSections: ["network.conv", "train.unload_text_encoder"],
+    additionalSections: [
+      "datasets.multi_control_paths",
+      "sample.multi_ctrl_imgs",
+      "model.low_vram",
+      "model.layer_offloading",
+      "model.qie.match_target_res",
+      "model.model_kwargs.kv_cache",
+    ],
+  },
+  {
+    name: "moss_image:base_edit",
+    label: "MOSS-Image Base [Edit Training]",
+    generateNameOverride: "MOSS-Image Base Edit",
+    group: "experimental",
+    modelNotes: mossImageEditNotes,
+    defaults: {
+      // default updates when [selected, unselected] in the UI
+      "config.process[0].model.name_or_path": [
+        "OpenMOSS-Team/MOSS-Image-Base",
+        defaultNameOrPath,
+      ],
+      "config.process[0].model.quantize": [true, false],
+      "config.process[0].model.qtype": ["convrot8", "qfloat8"],
+      // Qwen3.5-9B text encoder + vision tower (references ride in the prompt)
+      "config.process[0].model.quantize_te": [true, false],
+      "config.process[0].model.qtype_te": ["convrot8", "qfloat8"],
+      "config.process[0].model.low_vram": [true, false],
+      // prompt embeds depend on the control images, so the TE stays loaded
+      "config.process[0].train.unload_text_encoder": [false, false],
+      "config.process[0].sample.sampler": ["flowmatch", "flowmatch"],
+      "config.process[0].train.noise_scheduler": ["flowmatch", "flowmatch"],
+      "config.process[0].sample.width": [1024, 1024],
+      "config.process[0].sample.height": [1024, 1024],
+      "config.process[0].sample.guidance_scale": [3, 4],
+      "config.process[0].sample.sample_steps": [30, 25],
+      "config.process[0].train.timestep_type": ["shift", "sigmoid"],
+      // edit: references as clean t=0 latents + in the prompt; kv_cache:
+      // references attend only to themselves, so sampling computes their K/V
+      // once (must be trained that way)
+      "config.process[0].model.model_kwargs": [
+        {
+          edit: true,
+          kv_cache: true,
+          match_target_res: true,
+          uncond_skip_layers: [22],
+        },
+        {},
+      ],
+      "config.process[0].network.network_kwargs.ignore_if_contains": [
+        ["layers.22."],
+        [],
+      ],
+    },
+    disableSections: ["network.conv", "train.unload_text_encoder"],
+    additionalSections: [
+      "datasets.multi_control_paths",
+      "sample.multi_ctrl_imgs",
+      "model.low_vram",
+      "model.layer_offloading",
+      "model.qie.match_target_res",
+      "model.model_kwargs.kv_cache",
+    ],
+  },
+  {
+    name: "fibo2",
+    label: "Fibo 2.0 Dev",
+    group: "image",
+    defaults: {
+      // default updates when [selected, unselected] in the UI
+      // the Comfy-Org repack (vendor repo is gated); a comfy-layout
+      // .safetensors path (fine-tune) loads as named
+      "config.process[0].model.name_or_path": [
+        "Comfy-Org/Fibo-2.0",
+        defaultNameOrPath,
+      ],
+      // convrot8 attaches the repack's int8 convrot DiT / Qwen3-VL-4B as-is
+      "config.process[0].model.quantize": [true, false],
+      "config.process[0].model.qtype": ["convrot8", "qfloat8"],
+      "config.process[0].model.quantize_te": [true, false],
+      "config.process[0].model.qtype_te": ["convrot8", "qfloat8"],
+      "config.process[0].model.low_vram": [true, false],
+      "config.process[0].sample.sampler": ["flowmatch", "flowmatch"],
+      "config.process[0].train.noise_scheduler": ["flowmatch", "flowmatch"],
+      "config.process[0].sample.width": [1024, 1024],
+      "config.process[0].sample.height": [1024, 1024],
+      // vendor defaults: CFG 5 against the null caption, 30 steps
+      "config.process[0].sample.guidance_scale": [5, 4],
+      "config.process[0].sample.sample_steps": [30, 25],
+      "config.process[0].train.timestep_type": ["weighted", "sigmoid"],
+      "config.process[0].train.unload_text_encoder": [false, false],
+      "config.process[0].model.model_kwargs": [
+        {
+          match_target_res: true,
+        },
+        {},
+      ],
+    },
+    disableSections: ["network.conv", "train.unload_text_encoder"],
+    // one model: it edits when the dataset has control paths, and is plain
+    // text to image when it does not
+    additionalSections: [
+      "datasets.multi_control_paths",
+      "sample.multi_ctrl_imgs",
+      "model.qie.match_target_res",
+      "model.layer_offloading",
+      "model.low_vram",
+    ],
+    hasMultiLinePrompts: true,
   },
   {
     name: "flux2_klein_4b",

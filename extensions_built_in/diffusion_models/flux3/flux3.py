@@ -111,6 +111,8 @@ class Flux3Model(BaseModel):
         self.target_lora_modules = ["Flux3Transformer"]
         self.supports_model_paths = True
         self.use_old_lokr_format = False
+        # references keep their own framing; _fit_reference sizes them by area
+        self.use_raw_control_images = True
 
         self.processor = None  # Qwen3-VL AutoProcessor
         self.max_text_length = int(
@@ -429,6 +431,7 @@ class Flux3Model(BaseModel):
             height=gen_config.height,
             width=gen_config.width,
             num_inference_steps=gen_config.num_inference_steps,
+            sigmas=gen_config.sigmas,
             guidance_scale=gen_config.guidance_scale,
             latents=gen_config.latents,
             generator=generator,
@@ -515,7 +518,11 @@ class Flux3Model(BaseModel):
                 if batch.control_tensor_list is not None:
                     control_list = batch.control_tensor_list
                 elif batch.control_tensor is not None:
-                    control_list = [[batch.control_tensor[b]] for b in range(batch_size)]
+                    # (B, C, H, W) single reference or the dataloader's
+                    # (B, N, C, H, W) stack of N references per sample
+                    control_list = [
+                        list(ct) if ct.ndim == 4 else [ct] for ct in batch.control_tensor
+                    ]
             if control_list is not None:
                 target_pixels = h_lat * w_lat * 16 * 16
                 ref_latents = []

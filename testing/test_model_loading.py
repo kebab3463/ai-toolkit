@@ -237,6 +237,34 @@ MODEL_TESTS = {
         },
         "sample": {**IMG, "num_inference_steps": 20, "guidance_scale": 3.0},
     },
+    "moss_image:edit": {
+        # edit LoRA path: vision-tower prompt + t=0 reference latents, isolated
+        # references with their K/V cached across sampling steps
+        "model": {
+            "name_or_path": "OpenMOSS-Team/MOSS-Image-SFT",
+            "quantize": True,
+            "quantize_te": True,
+            "qtype": "convrot8",
+            "qtype_te": "convrot8",
+            "model_kwargs": {"edit": True, "kv_cache": True, "match_target_res": True},
+        },
+        "sample": {**IMG, "num_inference_steps": 20, "guidance_scale": 3.0},
+        "needs_control_image": True,
+    },
+    "moss_image:base_edit": {
+        # edit LoRA path: vision-tower prompt + t=0 reference latents, isolated
+        # references with their K/V cached across sampling steps
+        "model": {
+            "name_or_path": "OpenMOSS-Team/MOSS-Image-Base",
+            "quantize": True,
+            "quantize_te": True,
+            "qtype": "convrot8",
+            "qtype_te": "convrot8",
+            "model_kwargs": {"edit": True, "kv_cache": True, "match_target_res": True},
+        },
+        "sample": {**IMG, "num_inference_steps": 20, "guidance_scale": 3.0},
+        "needs_control_image": True,
+    },
     "moss_image:comfy": {
         # the Comfy-Org repack files named outright (a bare repo id prefers any
         # local bf16): int8 convrot SFT DiT + Qwen3.5-9B TE attach as-is
@@ -249,6 +277,29 @@ MODEL_TESTS = {
             "qtype_te": "convrot8",
         },
         "sample": {**IMG, "num_inference_steps": 20, "guidance_scale": 3.0},
+    },
+    "fibo2": {
+        "model": {
+            "name_or_path": "Comfy-Org/Fibo-2.0",
+            "quantize": True,
+            "quantize_te": True,
+            "qtype": "convrot8",
+            "qtype_te": "convrot8",
+        },
+        # vendor defaults are 30 steps, CFG 5
+        "sample": {**IMG, "num_inference_steps": 20, "guidance_scale": 5.0},
+    },
+    "fibo2:edit": {
+        # same arch: a control image makes it an edit
+        "model": {
+            "name_or_path": "Comfy-Org/Fibo-2.0",
+            "quantize": True,
+            "quantize_te": True,
+            "qtype": "convrot8",
+            "qtype_te": "convrot8",
+        },
+        "sample": {**IMG, "num_inference_steps": 20, "guidance_scale": 5.0},
+        "needs_control_image": True,
     },
     # ---- legacy monolith archs (components adopted into v2 on load) ----
     "sd1": {

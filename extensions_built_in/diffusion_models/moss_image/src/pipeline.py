@@ -9,6 +9,7 @@ convention is the toolkit's: sigma 1 = noise, the DiT predicts noise - clean.
 """
 
 from typing import List, Optional, Sequence
+from toolkit.sample_sigmas import sigmas_with_terminal
 
 import torch
 import torch.nn.functional as F
@@ -99,6 +100,9 @@ class MossImagePipeline:
         generator: Optional[torch.Generator] = None,
         shift: float = DEFAULT_SHIFT,
         uncond_skip_layers: Sequence[int] = DEFAULT_UNCOND_SKIP_LAYERS,
+        ref_latents: Optional[List[List[torch.Tensor]]] = None,
+        isolate_refs: bool = False,
+        sigmas: Optional[List[float]] = None,
         sampler: str = "euler",
         scheduler: str = "vendor",
         **kwargs,
@@ -124,8 +128,22 @@ class MossImagePipeline:
             latents = randn_tensor(shape, generator=generator, device=device, dtype=torch.float32)
         latents = latents.to(device, torch.float32)
 
+        # edit: references ride in both branches. Isolated references get
+        # their K/V computed on the first step and reused after; one cache per
+        # branch (the reference RoPE follows the prompt length, and the
+        # negative branch skips blocks)
+        has_refs = ref_latents is not None and any(len(r) > 0 for r in ref_latents)
+        ref_kwargs = {}
+        cond_cache = uncond_cache = None
+        if has_refs:
+            ref_kwargs = {"ref_latents": ref_latents, "isolate_refs": isolate_refs}
+            if isolate_refs:
+                cond_cache, uncond_cache = {}, {}
+
         sampling = FlowSampling("discrete_flow", shift)  # ComfyUI's MOSS model_sampling
-        if scheduler == "vendor":
+        if sigmas is not None:  # explicit sample-config sigmas win over any scheduler
+            sigmas = torch.tensor(sigmas_with_terminal(sigmas), dtype=torch.float32)
+        elif scheduler == "vendor":
             sigmas = moss_sigmas(num_inference_steps, shift=shift)
         else:
             sigmas = sampling.sigmas(scheduler, num_inference_steps)
@@ -135,7 +153,9 @@ class MossImagePipeline:
         def velocity(latents, sigma):
             timestep = (sigma * NUM_TRAIN_TIMESTEPS).reshape(1)
             # CFG combines fp32 predictions even though the DiT runs in bf16
-            pred = transformer(latents, timestep, cond, cond_mask).float()
+            pred = transformer(
+                latents, timestep, cond, cond_mask, ref_kv_cache=cond_cache, **ref_kwargs
+            ).float()
             if do_cfg:
                 pred_uncond = transformer(
                     latents,
@@ -143,6 +163,8 @@ class MossImagePipeline:
                     uncond,
                     uncond_mask,
                     skip_layers=uncond_skip_layers,
+                    ref_kv_cache=uncond_cache,
+                    **ref_kwargs,
                 ).float()
                 pred = pred_uncond + guidance_scale * (pred - pred_uncond)
             return pred

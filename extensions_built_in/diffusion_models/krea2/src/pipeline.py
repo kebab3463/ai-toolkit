@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import math
 from typing import List, Optional
+from toolkit.sample_sigmas import sigmas_with_terminal
 
 import torch
 from einops import rearrange, repeat
@@ -300,6 +301,7 @@ class Krea2Pipeline:
         width: int = 1024,
         num_inference_steps: int = 28,
         guidance_scale: float = 4.5,
+        sigmas: Optional[List[float]] = None,
         latents: Optional[torch.Tensor] = None,
         generator: Optional[torch.Generator] = None,
         ref_latents: Optional[List[List[torch.Tensor]]] = None,
@@ -355,7 +357,9 @@ class Krea2Pipeline:
             slope = (y2 - y1) / (x2 - x1)
             mu = slope * (gh * gw) + (y1 - slope * x1)
         sampling = FlowSampling("flux", mu)  # ComfyUI's ModelSamplingFlux at this mu
-        if scheduler == "vendor":
+        if sigmas is not None:  # explicit sample-config sigmas win over any scheduler
+            ts = sigmas_with_terminal(sigmas)
+        elif scheduler == "vendor":
             ts = timesteps(gh * gw, num_inference_steps, x1, x2, y1=y1, y2=y2, mu=mu)
         else:
             ts = sampling.sigmas(scheduler, num_inference_steps).tolist()
