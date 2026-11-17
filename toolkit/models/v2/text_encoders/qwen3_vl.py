@@ -51,7 +51,7 @@ class Qwen3VLTextEncoder(Qwen3VLForConditionalGeneration, OstrisTransformersMixi
         and materialize the tied ``lm_head`` the files omit."""
         out = {}
         for key, value in state_dict.items():
-            if key.startswith("model.layers.") or key in ("model.embed_tokens.weight", "model.norm.weight"):
+            if key.startswith(("model.layers.", "model.embed_tokens.")) or key == "model.norm.weight":
                 key = "model.language_model." + key[len("model.") :]
             elif key.startswith("visual."):
                 key = "model." + key
@@ -59,6 +59,12 @@ class Qwen3VLTextEncoder(Qwen3VLForConditionalGeneration, OstrisTransformersMixi
         embed = out.get("model.language_model.embed_tokens.weight")
         if "lm_head.weight" not in out and embed is not None:
             out["lm_head.weight"] = embed
+            # a pre-quantized (comfy_quant) table: lm_head gets the same
+            # marker and scales, so the importer dequantizes it like the embedding
+            for part in ("comfy_quant", "weight_scale", "input_scale"):
+                src = f"model.language_model.embed_tokens.{part}"
+                if src in out and f"lm_head.{part}" not in out:
+                    out[f"lm_head.{part}"] = out[src]
         return out
 
     def drop_vision_tower(self):

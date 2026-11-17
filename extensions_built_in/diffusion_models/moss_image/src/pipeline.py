@@ -2,7 +2,9 @@
 
 Matches the vendor pipeline: shift-5 sigma grid snapped to the nearest of the
 1000 training sigmas, fp32 Euler on fp32 noise, CFG 3 whose negative branch
-skips DiT block 22 (two forwards per step), empty negative prompt. Flow
+skips DiT block 22 (two forwards per step), empty negative prompt. ComfyUI's
+er_sde sampler and simple/beta schedulers are options
+(toolkit/comfy_flow_sampling.py). Flow
 convention is the toolkit's: sigma 1 = noise, the DiT predicts noise - clean.
 """
 
@@ -12,6 +14,8 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 from diffusers.utils.torch_utils import randn_tensor
+
+from toolkit.comfy_flow_sampling import FlowSampling, run_sampler
 
 DEFAULT_SHIFT = 5.0
 DEFAULT_GUIDANCE = 3.0
@@ -95,8 +99,13 @@ class MossImagePipeline:
         generator: Optional[torch.Generator] = None,
         shift: float = DEFAULT_SHIFT,
         uncond_skip_layers: Sequence[int] = DEFAULT_UNCOND_SKIP_LAYERS,
+        sampler: str = "euler",
+        scheduler: str = "vendor",
         **kwargs,
     ):
+        """``scheduler``: "vendor" (MOSSImageScheduler's grid) or a ComfyUI
+        port ("simple", "beta"); ``sampler``: "euler" or ComfyUI's "er_sde".
+        See toolkit/comfy_flow_sampling.py."""
         model = self.model
         device = model.device_torch
         dtype = model.torch_dtype
@@ -115,10 +124,15 @@ class MossImagePipeline:
             latents = randn_tensor(shape, generator=generator, device=device, dtype=torch.float32)
         latents = latents.to(device, torch.float32)
 
-        sigmas = moss_sigmas(num_inference_steps, shift=shift).to(device)
+        sampling = FlowSampling("discrete_flow", shift)  # ComfyUI's MOSS model_sampling
+        if scheduler == "vendor":
+            sigmas = moss_sigmas(num_inference_steps, shift=shift)
+        else:
+            sigmas = sampling.sigmas(scheduler, num_inference_steps)
+        sigmas = sigmas.to(device)
         num_steps = len(sigmas) - 1
-        for step_index in range(num_steps):
-            sigma, sigma_next = sigmas[step_index], sigmas[step_index + 1]
+
+        def velocity(latents, sigma):
             timestep = (sigma * NUM_TRAIN_TIMESTEPS).reshape(1)
             # CFG combines fp32 predictions even though the DiT runs in bf16
             pred = transformer(latents, timestep, cond, cond_mask).float()
@@ -131,10 +145,14 @@ class MossImagePipeline:
                     skip_layers=uncond_skip_layers,
                 ).float()
                 pred = pred_uncond + guidance_scale * (pred - pred_uncond)
+            return pred
+
+        def emit(step_index, sigma, denoised):
             if getattr(model, "sample_step_hook", None) is not None:
                 # inference engine preview: x0 estimate
-                model._emit_sample_step(latents - sigma * pred, step_index, num_steps)
-            latents = latents + (sigma_next - sigma) * pred
+                model._emit_sample_step(denoised, step_index, num_steps)
+
+        latents = run_sampler(sampler, velocity, latents, sigmas, sampling, generator=generator, callback=emit)
 
         images = model.decode_latents(latents, device=device, dtype=torch.float32)
         images = images.float().clamp(-1.0, 1.0)

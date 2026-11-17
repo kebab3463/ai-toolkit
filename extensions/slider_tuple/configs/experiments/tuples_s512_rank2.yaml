@@ -1,0 +1,123 @@
+# Screen on datasets/slider_tuples (138 tuples, levels from measurements.csv):
+# the rank-2 512 px screen (weight_s512_rank2.yaml, the screening default) on
+# the new data, with 2:3 previews (1024x1536, BigLove's native aspect).
+# 496 steps (8 x 62), sample / save every 62, 20-image in-training sweep
+# (2 held-out prompts x seeds 1000-1001 x m in 0, +-1.5, +-3), no anchors.
+#
+# Before registering (from the repo root):
+#   .venv/bin/python extensions/slider_tuple/scripts/set_captions.py datasets/slider_tuples/tuples.jsonl datasets/slider_tuples/captions
+#   .venv/bin/python extensions/slider_tuple/scripts/split_holdout.py datasets/slider_tuples/tuples.jsonl
+#   .venv/bin/python extensions/slider_tuple/scripts/sweep_grid.py extensions/slider_tuple/configs/experiments/tuples_s512_rank2.yaml \
+#       --prompts datasets/slider_tuples/held_out.jsonl --max-prompts 2 --seeds 1000,1001 --multipliers 0,1.5,3,-1.5,-3 --width 1024 --height 1536
+#   .venv/bin/python extensions/slider_tuple/scripts/ui_jobs.py add extensions/slider_tuple/configs/experiments/tuples_s512_rank2.yaml
+#
+# Run from the web UI, or:
+#   .venv/bin/python run.py extensions/slider_tuple/configs/experiments/tuples_s512_rank2.yaml
+---
+job: extension
+config:
+  name: "tuples_s512_rank2"
+  process:
+    - type: "slider_tuple_trainer"
+      training_folder: "output"
+      device: cuda:0
+      performance_log_every: 50
+      logging:
+        log_every: 1
+        use_ui_logger: true # per-step losses and slider/* metrics in output/<name>/loss_log.db
+      network:
+        type: "lora"
+        linear: 2 # baseline: 4
+        linear_alpha: 2
+      save:
+        dtype: float16
+        save_every: 62
+        max_step_saves_to_keep: 16
+      datasets:
+        - slider_tuples: "datasets/slider_tuples/train.jsonl"
+          guidance_type: "slider_tuple"
+          caption_dropout_rate: 0.0
+          cache_latents_to_disk: true
+          resolution: [512]
+      slider:
+        # Multiplier unit: kappa = the median tuple span (levels = log mask area
+        # from levels_from_csv.py; kappa ~0.257, a heavy/thin area ratio of 1.29),
+        # so m = 1 is one typical edit's full change, and each tuple trains in
+        # proportion to its own change (+-0.09 .. +-1.21, typical +-0.5). Tuples
+        # spanning less than min_span x kappa are dropped (000115).
+        level_norm: median_span
+        members_per_step: all
+        # writes output/<name>/slider_debug/step<N>_<id>.png for the first
+        # steps: every member with its multiplier, to check the data by eye
+        debug_dump_steps: 2
+        # no anchors in screening runs
+        # Previews on the deployed Turbo model (F7): 8 steps, CFG off, mu
+        # 1.15, trainee LoRA as hooks at each prompt's --m. Raw waits on the CPU.
+        turbo_preview: "/home/csprunger/.nvme_cache/diffusion_models/Krea2/BigLoveKreaLife2_int8.safetensors" # EDIT
+        turbo_preview_offload: true
+      train:
+        skip_first_sample: true # step-0 previews are the base model
+        batch_size: 1
+        steps: 496 # 8 x 62: the final sample / save lands on the last interval
+        gradient_accumulation: 1
+        train_unet: true
+        train_text_encoder: false
+        cache_text_embeddings: true
+        gradient_checkpointing: true
+        noise_scheduler: "flowmatch"
+        timestep_type: "linear" # UI default for Krea 2
+        optimizer: "adamw8bit"
+        lr: 3e-4 # run 2: 1e-4
+        dtype: bf16
+      model:
+        # Raw checkpoint to train on: a folder with one DiT .safetensors in the
+        # krea/Krea-2-Raw format (text encoder and VAE load from their defaults)
+        name_or_path: "models/BigLoveKreaLife2_raw_AI-Toolkit"
+        arch: "krea2"
+        dtype: bf16 # required: the float16 default breaks Krea 2 decoding (NOTES.md)
+        # convrot8 (= ComfyUI int8_convrot) is required on a 32 GB card and
+        # beat qfloat8 on speed, memory and layer error (NOTES.md)
+        quantize: true
+        qtype: "convrot8"
+        quantize_te: true
+        qtype_te: "qfloat8"
+        low_vram: false
+      sample:
+        format: "png"
+        sampler: "flowmatch"
+        sample_every: 62
+        width: 1024
+        height: 1536
+        # one prompt and seed at several strengths, so images differ only by --m;
+        # EDIT: use held-out captions (held_out.jsonl) for a fair look
+        neg: ""
+        seed: 42
+        walk_seed: false
+        # used only without turbo_preview (Raw sampling)
+        guidance_scale: 4
+        sample_steps: 25
+        # sweep grid (sweep_grid.py): prompt x seed x multiplier
+        samples:
+          - {prompt: "A full-length mirror selfie shot at eye level, the woman facing the mirror squarely with a three-quarter camera angle. She is an adult East Asian woman with long straight black hair parted in the middle, smiling with teeth showing, gaze directed down at the camera screen. She stands upright, right arm raised holding a black mirrorless camera with a protruding lens and a white wrist strap, left hand resting at her hip. She wears a navy-blue cropped jersey with white shoulder piping and a large white outlined number on the chest, a black bra underneath, and high-cut black bikini bottoms, plus a silver bracelet on her left wrist and rings on her left hand. Setting: a covered terrace with a dark slatted pergola ceiling, peach-toned wall, black metal chair, glass table, and a green curtain framing the edge. Soft, diffuse daylight; shallow depth of field.", seed: 1000, network_multiplier: -3.0}
+          - {prompt: "A full-length mirror selfie shot at eye level, the woman facing the mirror squarely with a three-quarter camera angle. She is an adult East Asian woman with long straight black hair parted in the middle, smiling with teeth showing, gaze directed down at the camera screen. She stands upright, right arm raised holding a black mirrorless camera with a protruding lens and a white wrist strap, left hand resting at her hip. She wears a navy-blue cropped jersey with white shoulder piping and a large white outlined number on the chest, a black bra underneath, and high-cut black bikini bottoms, plus a silver bracelet on her left wrist and rings on her left hand. Setting: a covered terrace with a dark slatted pergola ceiling, peach-toned wall, black metal chair, glass table, and a green curtain framing the edge. Soft, diffuse daylight; shallow depth of field.", seed: 1000, network_multiplier: -1.5}
+          - {prompt: "A full-length mirror selfie shot at eye level, the woman facing the mirror squarely with a three-quarter camera angle. She is an adult East Asian woman with long straight black hair parted in the middle, smiling with teeth showing, gaze directed down at the camera screen. She stands upright, right arm raised holding a black mirrorless camera with a protruding lens and a white wrist strap, left hand resting at her hip. She wears a navy-blue cropped jersey with white shoulder piping and a large white outlined number on the chest, a black bra underneath, and high-cut black bikini bottoms, plus a silver bracelet on her left wrist and rings on her left hand. Setting: a covered terrace with a dark slatted pergola ceiling, peach-toned wall, black metal chair, glass table, and a green curtain framing the edge. Soft, diffuse daylight; shallow depth of field.", seed: 1000, network_multiplier: 0.0}
+          - {prompt: "A full-length mirror selfie shot at eye level, the woman facing the mirror squarely with a three-quarter camera angle. She is an adult East Asian woman with long straight black hair parted in the middle, smiling with teeth showing, gaze directed down at the camera screen. She stands upright, right arm raised holding a black mirrorless camera with a protruding lens and a white wrist strap, left hand resting at her hip. She wears a navy-blue cropped jersey with white shoulder piping and a large white outlined number on the chest, a black bra underneath, and high-cut black bikini bottoms, plus a silver bracelet on her left wrist and rings on her left hand. Setting: a covered terrace with a dark slatted pergola ceiling, peach-toned wall, black metal chair, glass table, and a green curtain framing the edge. Soft, diffuse daylight; shallow depth of field.", seed: 1000, network_multiplier: 1.5}
+          - {prompt: "A full-length mirror selfie shot at eye level, the woman facing the mirror squarely with a three-quarter camera angle. She is an adult East Asian woman with long straight black hair parted in the middle, smiling with teeth showing, gaze directed down at the camera screen. She stands upright, right arm raised holding a black mirrorless camera with a protruding lens and a white wrist strap, left hand resting at her hip. She wears a navy-blue cropped jersey with white shoulder piping and a large white outlined number on the chest, a black bra underneath, and high-cut black bikini bottoms, plus a silver bracelet on her left wrist and rings on her left hand. Setting: a covered terrace with a dark slatted pergola ceiling, peach-toned wall, black metal chair, glass table, and a green curtain framing the edge. Soft, diffuse daylight; shallow depth of field.", seed: 1000, network_multiplier: 3.0}
+          - {prompt: "A full-length mirror selfie shot at eye level, the woman facing the mirror squarely with a three-quarter camera angle. She is an adult East Asian woman with long straight black hair parted in the middle, smiling with teeth showing, gaze directed down at the camera screen. She stands upright, right arm raised holding a black mirrorless camera with a protruding lens and a white wrist strap, left hand resting at her hip. She wears a navy-blue cropped jersey with white shoulder piping and a large white outlined number on the chest, a black bra underneath, and high-cut black bikini bottoms, plus a silver bracelet on her left wrist and rings on her left hand. Setting: a covered terrace with a dark slatted pergola ceiling, peach-toned wall, black metal chair, glass table, and a green curtain framing the edge. Soft, diffuse daylight; shallow depth of field.", seed: 1001, network_multiplier: -3.0}
+          - {prompt: "A full-length mirror selfie shot at eye level, the woman facing the mirror squarely with a three-quarter camera angle. She is an adult East Asian woman with long straight black hair parted in the middle, smiling with teeth showing, gaze directed down at the camera screen. She stands upright, right arm raised holding a black mirrorless camera with a protruding lens and a white wrist strap, left hand resting at her hip. She wears a navy-blue cropped jersey with white shoulder piping and a large white outlined number on the chest, a black bra underneath, and high-cut black bikini bottoms, plus a silver bracelet on her left wrist and rings on her left hand. Setting: a covered terrace with a dark slatted pergola ceiling, peach-toned wall, black metal chair, glass table, and a green curtain framing the edge. Soft, diffuse daylight; shallow depth of field.", seed: 1001, network_multiplier: -1.5}
+          - {prompt: "A full-length mirror selfie shot at eye level, the woman facing the mirror squarely with a three-quarter camera angle. She is an adult East Asian woman with long straight black hair parted in the middle, smiling with teeth showing, gaze directed down at the camera screen. She stands upright, right arm raised holding a black mirrorless camera with a protruding lens and a white wrist strap, left hand resting at her hip. She wears a navy-blue cropped jersey with white shoulder piping and a large white outlined number on the chest, a black bra underneath, and high-cut black bikini bottoms, plus a silver bracelet on her left wrist and rings on her left hand. Setting: a covered terrace with a dark slatted pergola ceiling, peach-toned wall, black metal chair, glass table, and a green curtain framing the edge. Soft, diffuse daylight; shallow depth of field.", seed: 1001, network_multiplier: 0.0}
+          - {prompt: "A full-length mirror selfie shot at eye level, the woman facing the mirror squarely with a three-quarter camera angle. She is an adult East Asian woman with long straight black hair parted in the middle, smiling with teeth showing, gaze directed down at the camera screen. She stands upright, right arm raised holding a black mirrorless camera with a protruding lens and a white wrist strap, left hand resting at her hip. She wears a navy-blue cropped jersey with white shoulder piping and a large white outlined number on the chest, a black bra underneath, and high-cut black bikini bottoms, plus a silver bracelet on her left wrist and rings on her left hand. Setting: a covered terrace with a dark slatted pergola ceiling, peach-toned wall, black metal chair, glass table, and a green curtain framing the edge. Soft, diffuse daylight; shallow depth of field.", seed: 1001, network_multiplier: 1.5}
+          - {prompt: "A full-length mirror selfie shot at eye level, the woman facing the mirror squarely with a three-quarter camera angle. She is an adult East Asian woman with long straight black hair parted in the middle, smiling with teeth showing, gaze directed down at the camera screen. She stands upright, right arm raised holding a black mirrorless camera with a protruding lens and a white wrist strap, left hand resting at her hip. She wears a navy-blue cropped jersey with white shoulder piping and a large white outlined number on the chest, a black bra underneath, and high-cut black bikini bottoms, plus a silver bracelet on her left wrist and rings on her left hand. Setting: a covered terrace with a dark slatted pergola ceiling, peach-toned wall, black metal chair, glass table, and a green curtain framing the edge. Soft, diffuse daylight; shallow depth of field.", seed: 1001, network_multiplier: 3.0}
+          - {prompt: "Eye-level three-quarter indoor photo of a woman standing in a three-quarter view facing the camera. She has fair skin, long wavy platinum-blonde hair, light eyes and neutral makeup, and looks straight ahead with a calm expression. Her right arm rests at her side; her left arm is raised, fingers curled around a strand of hair. A dark floral tattoo sits on her torso below the bra line, and a small tattoo on her left forearm. She wears a neon-yellow fishnet lingerie set \u2014 a triangle bra with thin straps meeting in a V, a high-waisted garter belt with three horizontal cutouts, a matching thong, and two fishnet thigh bands linked by vertical garter straps. Behind her: a white sofa, leopard-print cushion, beige pillow, tan leather armchair, sheer white curtains and a glass door. Soft diffuse daylight from the window, warm-neutral, background slightly blurred.", seed: 1000, network_multiplier: -3.0}
+          - {prompt: "Eye-level three-quarter indoor photo of a woman standing in a three-quarter view facing the camera. She has fair skin, long wavy platinum-blonde hair, light eyes and neutral makeup, and looks straight ahead with a calm expression. Her right arm rests at her side; her left arm is raised, fingers curled around a strand of hair. A dark floral tattoo sits on her torso below the bra line, and a small tattoo on her left forearm. She wears a neon-yellow fishnet lingerie set \u2014 a triangle bra with thin straps meeting in a V, a high-waisted garter belt with three horizontal cutouts, a matching thong, and two fishnet thigh bands linked by vertical garter straps. Behind her: a white sofa, leopard-print cushion, beige pillow, tan leather armchair, sheer white curtains and a glass door. Soft diffuse daylight from the window, warm-neutral, background slightly blurred.", seed: 1000, network_multiplier: -1.5}
+          - {prompt: "Eye-level three-quarter indoor photo of a woman standing in a three-quarter view facing the camera. She has fair skin, long wavy platinum-blonde hair, light eyes and neutral makeup, and looks straight ahead with a calm expression. Her right arm rests at her side; her left arm is raised, fingers curled around a strand of hair. A dark floral tattoo sits on her torso below the bra line, and a small tattoo on her left forearm. She wears a neon-yellow fishnet lingerie set \u2014 a triangle bra with thin straps meeting in a V, a high-waisted garter belt with three horizontal cutouts, a matching thong, and two fishnet thigh bands linked by vertical garter straps. Behind her: a white sofa, leopard-print cushion, beige pillow, tan leather armchair, sheer white curtains and a glass door. Soft diffuse daylight from the window, warm-neutral, background slightly blurred.", seed: 1000, network_multiplier: 0.0}
+          - {prompt: "Eye-level three-quarter indoor photo of a woman standing in a three-quarter view facing the camera. She has fair skin, long wavy platinum-blonde hair, light eyes and neutral makeup, and looks straight ahead with a calm expression. Her right arm rests at her side; her left arm is raised, fingers curled around a strand of hair. A dark floral tattoo sits on her torso below the bra line, and a small tattoo on her left forearm. She wears a neon-yellow fishnet lingerie set \u2014 a triangle bra with thin straps meeting in a V, a high-waisted garter belt with three horizontal cutouts, a matching thong, and two fishnet thigh bands linked by vertical garter straps. Behind her: a white sofa, leopard-print cushion, beige pillow, tan leather armchair, sheer white curtains and a glass door. Soft diffuse daylight from the window, warm-neutral, background slightly blurred.", seed: 1000, network_multiplier: 1.5}
+          - {prompt: "Eye-level three-quarter indoor photo of a woman standing in a three-quarter view facing the camera. She has fair skin, long wavy platinum-blonde hair, light eyes and neutral makeup, and looks straight ahead with a calm expression. Her right arm rests at her side; her left arm is raised, fingers curled around a strand of hair. A dark floral tattoo sits on her torso below the bra line, and a small tattoo on her left forearm. She wears a neon-yellow fishnet lingerie set \u2014 a triangle bra with thin straps meeting in a V, a high-waisted garter belt with three horizontal cutouts, a matching thong, and two fishnet thigh bands linked by vertical garter straps. Behind her: a white sofa, leopard-print cushion, beige pillow, tan leather armchair, sheer white curtains and a glass door. Soft diffuse daylight from the window, warm-neutral, background slightly blurred.", seed: 1000, network_multiplier: 3.0}
+          - {prompt: "Eye-level three-quarter indoor photo of a woman standing in a three-quarter view facing the camera. She has fair skin, long wavy platinum-blonde hair, light eyes and neutral makeup, and looks straight ahead with a calm expression. Her right arm rests at her side; her left arm is raised, fingers curled around a strand of hair. A dark floral tattoo sits on her torso below the bra line, and a small tattoo on her left forearm. She wears a neon-yellow fishnet lingerie set \u2014 a triangle bra with thin straps meeting in a V, a high-waisted garter belt with three horizontal cutouts, a matching thong, and two fishnet thigh bands linked by vertical garter straps. Behind her: a white sofa, leopard-print cushion, beige pillow, tan leather armchair, sheer white curtains and a glass door. Soft diffuse daylight from the window, warm-neutral, background slightly blurred.", seed: 1001, network_multiplier: -3.0}
+          - {prompt: "Eye-level three-quarter indoor photo of a woman standing in a three-quarter view facing the camera. She has fair skin, long wavy platinum-blonde hair, light eyes and neutral makeup, and looks straight ahead with a calm expression. Her right arm rests at her side; her left arm is raised, fingers curled around a strand of hair. A dark floral tattoo sits on her torso below the bra line, and a small tattoo on her left forearm. She wears a neon-yellow fishnet lingerie set \u2014 a triangle bra with thin straps meeting in a V, a high-waisted garter belt with three horizontal cutouts, a matching thong, and two fishnet thigh bands linked by vertical garter straps. Behind her: a white sofa, leopard-print cushion, beige pillow, tan leather armchair, sheer white curtains and a glass door. Soft diffuse daylight from the window, warm-neutral, background slightly blurred.", seed: 1001, network_multiplier: -1.5}
+          - {prompt: "Eye-level three-quarter indoor photo of a woman standing in a three-quarter view facing the camera. She has fair skin, long wavy platinum-blonde hair, light eyes and neutral makeup, and looks straight ahead with a calm expression. Her right arm rests at her side; her left arm is raised, fingers curled around a strand of hair. A dark floral tattoo sits on her torso below the bra line, and a small tattoo on her left forearm. She wears a neon-yellow fishnet lingerie set \u2014 a triangle bra with thin straps meeting in a V, a high-waisted garter belt with three horizontal cutouts, a matching thong, and two fishnet thigh bands linked by vertical garter straps. Behind her: a white sofa, leopard-print cushion, beige pillow, tan leather armchair, sheer white curtains and a glass door. Soft diffuse daylight from the window, warm-neutral, background slightly blurred.", seed: 1001, network_multiplier: 0.0}
+          - {prompt: "Eye-level three-quarter indoor photo of a woman standing in a three-quarter view facing the camera. She has fair skin, long wavy platinum-blonde hair, light eyes and neutral makeup, and looks straight ahead with a calm expression. Her right arm rests at her side; her left arm is raised, fingers curled around a strand of hair. A dark floral tattoo sits on her torso below the bra line, and a small tattoo on her left forearm. She wears a neon-yellow fishnet lingerie set \u2014 a triangle bra with thin straps meeting in a V, a high-waisted garter belt with three horizontal cutouts, a matching thong, and two fishnet thigh bands linked by vertical garter straps. Behind her: a white sofa, leopard-print cushion, beige pillow, tan leather armchair, sheer white curtains and a glass door. Soft diffuse daylight from the window, warm-neutral, background slightly blurred.", seed: 1001, network_multiplier: 1.5}
+          - {prompt: "Eye-level three-quarter indoor photo of a woman standing in a three-quarter view facing the camera. She has fair skin, long wavy platinum-blonde hair, light eyes and neutral makeup, and looks straight ahead with a calm expression. Her right arm rests at her side; her left arm is raised, fingers curled around a strand of hair. A dark floral tattoo sits on her torso below the bra line, and a small tattoo on her left forearm. She wears a neon-yellow fishnet lingerie set \u2014 a triangle bra with thin straps meeting in a V, a high-waisted garter belt with three horizontal cutouts, a matching thong, and two fishnet thigh bands linked by vertical garter straps. Behind her: a white sofa, leopard-print cushion, beige pillow, tan leather armchair, sheer white curtains and a glass door. Soft diffuse daylight from the window, warm-neutral, background slightly blurred.", seed: 1001, network_multiplier: 3.0}
+meta:
+  name: "[name]"
+  version: "1.0"

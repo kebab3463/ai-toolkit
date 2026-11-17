@@ -21,6 +21,8 @@ from einops import rearrange, repeat
 from PIL import Image
 from diffusers.utils.torch_utils import randn_tensor
 
+from toolkit.comfy_flow_sampling import FlowSampling, run_sampler
+
 from .mmdit import SingleStreamDiT
 
 
@@ -301,8 +303,13 @@ class Krea2Pipeline:
         latents: Optional[torch.Tensor] = None,
         generator: Optional[torch.Generator] = None,
         ref_latents: Optional[List[List[torch.Tensor]]] = None,
+        sampler: str = "euler",
+        scheduler: str = "vendor",
         **kwargs,
     ) -> List[Image.Image]:
+        """``scheduler``: "vendor" (the resolution-aware mu grid below) or a
+        ComfyUI port ("simple", "beta") on ComfyUI's flux sigma table at the
+        same mu; ``sampler``: "euler" or ComfyUI's "er_sde"."""
         model = self.model
         device = model.device_torch
         dtype = model.torch_dtype
@@ -344,7 +351,14 @@ class Krea2Pipeline:
         align = ae_scale * patch
         x1 = (minres // align) ** 2
         x2 = (maxres // align) ** 2
-        ts = timesteps(gh * gw, num_inference_steps, x1, x2, y1=y1, y2=y2, mu=mu)
+        if mu is None:  # the mu timesteps() derives from the resolution
+            slope = (y2 - y1) / (x2 - x1)
+            mu = slope * (gh * gw) + (y1 - slope * x1)
+        sampling = FlowSampling("flux", mu)  # ComfyUI's ModelSamplingFlux at this mu
+        if scheduler == "vendor":
+            ts = timesteps(gh * gw, num_inference_steps, x1, x2, y1=y1, y2=y2, mu=mu)
+        else:
+            ts = sampling.sigmas(scheduler, num_inference_steps).tolist()
 
         # With the kv_cache model kwarg (isolated ref attention) the ref K/V
         # are step-invariant, so the very first model call doubles as the
@@ -356,10 +370,10 @@ class Krea2Pipeline:
         if isolate and ref_latents is not None and any(len(r) > 0 for r in ref_latents):
             ref_cache = {"kv": None, "mask": None}
 
-        # Euler integration of the flow ODE (with optional CFG).
         num_steps = len(ts) - 1
-        for i, (tcurr, tprev) in enumerate(zip(ts[:-1], ts[1:])):
-            t = torch.full((latents.shape[0],), tcurr, dtype=dtype, device=device)
+
+        def velocity(latents, tcurr):
+            t = torch.full((latents.shape[0],), float(tcurr), dtype=dtype, device=device)
             v_cond = predict_velocity(
                 transformer,
                 latents.to(dtype),
@@ -384,12 +398,18 @@ class Krea2Pipeline:
                 v = v_cond + guidance_scale * (v_cond - v_uncond)
             else:
                 v = v_cond
-            v = v.to(torch.float32)
+            return v.to(torch.float32)
+
+        def emit_step(i, sigma, denoised):
             # inference engine preview: x0 estimate for this step
             emit = getattr(model, "_emit_sample_step", None)
             if emit is not None and getattr(model, "sample_step_hook", None) is not None:
-                emit(latents - float(tcurr) * v, i, num_steps)
-            latents = latents + (tprev - tcurr) * v
+                emit(denoised, i, num_steps)
+
+        # Euler (or ComfyUI's er_sde) on the flow ODE, with optional CFG
+        sigmas = torch.tensor(ts, dtype=torch.float32, device=device)
+        latents = run_sampler(sampler, velocity, latents, sigmas, sampling,
+                              generator=generator, callback=emit_step)
 
         images = model.decode_latents(latents, device=device, dtype=dtype)
         images = images.float().clamp(-1.0, 1.0)

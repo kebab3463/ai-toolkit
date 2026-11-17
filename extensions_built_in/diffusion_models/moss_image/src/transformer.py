@@ -147,6 +147,17 @@ class MossImageTransformer(nn.Module, OstrisModelMixin):
 
     @classmethod
     def convert_state_dict_on_load(cls, state_dict):
+        # ComfyUI full-checkpoint prefixes (e.g. PornMaster_Moss_Base_V2: weights
+        # under model.diffusion_model., header quant markers bare), stripped as
+        # ComfyUI strips them
+        stripped = {}
+        for k, v in state_dict.items():
+            for prefix in ("model.diffusion_model.", "diffusion_model."):
+                if k.startswith(prefix):
+                    k = k[len(prefix):]
+                    break
+            stripped[k] = v
+        state_dict = stripped
         # derived constants; recomputed in fp32 every forward
         state_dict = {k: v for k, v in state_dict.items() if k != "rope.bands"}
         fuse_split_qkv(state_dict)

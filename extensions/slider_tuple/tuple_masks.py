@@ -109,15 +109,27 @@ def load_mask_models(device: str = "cuda:0"):
     (facebook/sapiens2-matting-1b, downloaded into models/sapiens2 on first use).
     keypoints_fn: the most confident person's 17 COCO keypoints as (x, y, score)
     rows, or None (torchvision Keypoint R-CNN, weights downloaded on first use)."""
+    return mask_fns(*load_mask_modules(device))
+
+
+def load_mask_modules(device: str = "cuda:0"):
+    """The (matting, detector) modules behind load_mask_models."""
     import torch
     import torchvision
-    from torchvision.transforms.functional import to_tensor
 
     from toolkit.models.sapiens2 import Sapiens2Matting
 
     matting = Sapiens2Matting.from_pretrained(device=device, dtype=torch.float16)
     weights = torchvision.models.detection.KeypointRCNN_ResNet50_FPN_Weights.DEFAULT
     detector = torchvision.models.detection.keypointrcnn_resnet50_fpn(weights=weights).to(device).eval()
+    return matting, detector
+
+
+def mask_fns(matting, detector):
+    """load_mask_models' (matte_fn, keypoints_fn) over already loaded modules,
+    run on whatever device each module is on when called."""
+    import torch
+    from torchvision.transforms.functional import to_tensor
 
     @torch.no_grad()
     def matte_fn(img):
@@ -125,7 +137,7 @@ def load_mask_models(device: str = "cuda:0"):
 
     @torch.no_grad()
     def keypoints_fn(img):
-        out = detector([to_tensor(img).to(device)])[0]
+        out = detector([to_tensor(img).to(next(detector.parameters()).device)])[0]
         if len(out["scores"]) == 0:
             return None
         best = int(out["scores"].argmax())  # the tuple's one person: the most confident detection

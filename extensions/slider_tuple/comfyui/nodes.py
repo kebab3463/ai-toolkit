@@ -73,19 +73,39 @@ def _device():
         return "cuda:0" if torch.cuda.is_available() else "cpu"
 
 
+def _patcher(module, load_device, offload_device):
+    """`module` registered with ComfyUI's model management. ModelPatcher assigns
+    `.device` (a read-only property on Sapiens2Matting), so it gets a plain
+    wrapper module named like the original, which is what memory UIs show."""
+    import comfy.model_patcher
+
+    wrapper = type(type(module).__name__, (torch.nn.Module,), {})()
+    wrapper.module = module
+    return comfy.model_patcher.ModelPatcher(wrapper, load_device=load_device, offload_device=offload_device)
+
+
 def get_models(device=None):
+    """(matte_fn, keypoints_fn) whose models ComfyUI loads to the GPU on each call
+    and may offload between calls, like its own models."""
+    import comfy.model_management
+
     device = device or _device()
     if device not in _MODELS:
         tuple_masks = _load("slider_tuple_tuple_masks", os.path.join(EXTENSION, "tuple_masks.py"))
+        offload_device = comfy.model_management.unet_offload_device()
         with _toolkit_stubs():
-            _MODELS[device] = tuple_masks.load_mask_models(device)
+            modules = tuple_masks.load_mask_modules(offload_device)
+        patchers = [_patcher(m, torch.device(device), offload_device) for m in modules]
+
+        def on_gpu(fn):
+            def run(img):
+                # Plain torch layers cannot run partially offloaded, so always load fully
+                comfy.model_management.load_models_gpu(patchers, force_full_load=True)
+                return fn(img)
+            return run
+
+        _MODELS[device] = tuple(on_gpu(fn) for fn in tuple_masks.mask_fns(*modules))
     return _MODELS[device]
-
-
-def unload_models():
-    _MODELS.clear()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
 
 
 def to_pil_list(images):
@@ -146,8 +166,6 @@ class SliderBodyWidth:
                 "image": ("IMAGE",),
                 "keypoint_score": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 20.0, "step": 0.1,
                                              "tooltip": "minimum Keypoint R-CNN score for shoulders and hips"}),
-                "keep_models_loaded": ("BOOLEAN", {"default": True,
-                                                   "tooltip": "keep Sapiens2 + Keypoint R-CNN (~3 GB) in memory"}),
             }
         }
 
@@ -159,19 +177,15 @@ class SliderBodyWidth:
                    "Keypoint R-CNN). Comparable between versions of one photo, not across different photos. "
                    "score is the first image's (0 if unmeasurable); report lists all.")
 
-    def run(self, image, keypoint_score, keep_models_loaded, models=None):
+    def run(self, image, keypoint_score, models=None):
         loaded = models or get_models()
         lines, previews, first = [], [], None
-        try:
-            for i, img in enumerate(to_pil_list(image)):
-                m = measure(img, loaded, keypoint_score)
-                if i == 0:
-                    first = m.score
-                lines.append(f"[{i}] " + (f"{m.score:.4f}" if m.score is not None else f"unmeasurable: {m.reason}"))
-                previews.append(body_measure().draw_measurement(np.asarray(img), m))
-        finally:
-            if not keep_models_loaded and models is None:
-                unload_models()
+        for i, img in enumerate(to_pil_list(image)):
+            m = measure(img, loaded, keypoint_score)
+            if i == 0:
+                first = m.score
+            lines.append(f"[{i}] " + (f"{m.score:.4f}" if m.score is not None else f"unmeasurable: {m.reason}"))
+            previews.append(body_measure().draw_measurement(np.asarray(img), m))
         return (float(first or 0.0), "\n".join(lines), to_image_batch(previews))
 
 
@@ -191,7 +205,6 @@ class SliderEditStrength:
                                                     "The measure's per-image noise is ~0.03; the first weight "
                                                     "data's median edit was 0.11"}),
                 "keypoint_score": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 20.0, "step": 0.1}),
-                "keep_models_loaded": ("BOOLEAN", {"default": True}),
             }
         }
 
@@ -204,28 +217,24 @@ class SliderEditStrength:
                    "ok is True when the change goes in the chosen direction by at least min_change. "
                    "With batches the outputs are for the first pair; verdict lists every pair.")
 
-    def run(self, reference, edited, direction, min_change, keypoint_score, keep_models_loaded, models=None):
+    def run(self, reference, edited, direction, min_change, keypoint_score, models=None):
         refs, edits = to_pil_list(reference), to_pil_list(edited)
         if len(refs) not in (1, len(edits)):
             raise ValueError(f"reference batch ({len(refs)}) must be 1 or match edited ({len(edits)})")
         loaded = models or get_models()
         bm = body_measure()
         results, lines, previews = [], [], []
-        try:
-            ref_cache = {}
-            for i, edit in enumerate(edits):
-                r = 0 if len(refs) == 1 else i
-                if r not in ref_cache:
-                    ref_cache[r] = measure(refs[r], loaded, keypoint_score)
-                ref_m, edit_m = ref_cache[r], measure(edit, loaded, keypoint_score)
-                change, relative, verdict = judge(ref_m, edit_m, direction, min_change)
-                results.append((change, relative, verdict.startswith("OK")))
-                lines.append(f"[{i}] {verdict}")
-                previews.append(side_by_side([bm.draw_measurement(np.asarray(refs[r]), ref_m),
-                                              bm.draw_measurement(np.asarray(edit), edit_m)]))
-        finally:
-            if not keep_models_loaded and models is None:
-                unload_models()
+        ref_cache = {}
+        for i, edit in enumerate(edits):
+            r = 0 if len(refs) == 1 else i
+            if r not in ref_cache:
+                ref_cache[r] = measure(refs[r], loaded, keypoint_score)
+            ref_m, edit_m = ref_cache[r], measure(edit, loaded, keypoint_score)
+            change, relative, verdict = judge(ref_m, edit_m, direction, min_change)
+            results.append((change, relative, verdict.startswith("OK")))
+            lines.append(f"[{i}] {verdict}")
+            previews.append(side_by_side([bm.draw_measurement(np.asarray(refs[r]), ref_m),
+                                          bm.draw_measurement(np.asarray(edit), edit_m)]))
         change, relative, ok = results[0]
         return (float(change), float(relative), bool(ok), "\n".join(lines), to_image_batch(previews))
 

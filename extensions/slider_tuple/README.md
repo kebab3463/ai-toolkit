@@ -109,7 +109,11 @@ only rewrote the manifest.)
   the frame, a large `head_shift_px` that it moved the head.
 - Re-running is cheap: finished images are reused, so new captions only
   rewrite `tuples.jsonl`. Use `--overwrite` after changing the images or the
-  paste-back settings.
+  paste-back settings. That re-run also resets the levels, so once a
+  manifest has measured levels (§2d), add captions with
+  `scripts/set_captions.py <manifest> <captions folder>` instead. It changes
+  only the captions and can be re-run as more caption files arrive; tuples
+  without one keep theirs.
 
 ### 2b. Already aligned images (no originals)
 
@@ -165,6 +169,27 @@ Check that the edits actually change the attribute, and by how much:
 - `--add-original` also adds the real original as a `real` member. Use it only
   when the other members are real photos too, or when real-vs-synthetic
   differences don't matter. Next to pass-through edits it works against them.
+
+**Your own measurements (a CSV).** For a measure made outside this extension
+(mask areas, a classifier score, ...), with one row per tuple and one column
+per member folder:
+
+```bash
+.venv/bin/python extensions/slider_tuple/scripts/levels_from_csv.py \
+    datasets/slider_tuples/unmeasured_tuples.jsonl datasets/slider_tuples/measurements.csv \
+    --column neg=thin --column pos=heavy --out datasets/slider_tuples/tuples.jsonl
+```
+
+- `--transform log` (default) sets level = log(value), so a tuple's span is
+  its log ratio. Use it for areas, counts and widths, which scale with the
+  photo's size and framing. Use `linear` for scores already comparable across
+  images.
+- Then run `split_holdout.py` and train with `level_norm: median_span`, as
+  above. Each tuple trains at ±(span / 2) / κ: ±0.5 for a median tuple, more
+  for a strong edit, less for a weak one.
+- The script prints the ratio and span range and how many tuples the
+  trainer's `min_span` will drop. `--min-ratio` drops near-no-op edits
+  itself. Tuples without a row are left out and listed.
 
 ### 2e. Intermediate members from interpolated frames (optional)
 
@@ -418,6 +443,8 @@ Dataset entries take `slider_tuples: <manifest>` with
 | `scripts/split_holdout.py` | train / held-out manifests (§2c) |
 | `scripts/reweight_masks.py` | change background / head / body weights of existing masks (§2a) |
 | `scripts/measure_tuples.py` | body-width measure of every member; measured levels (§2d) |
+| `scripts/set_captions.py` | captions into an existing manifest from `.txt` / `.json` files, levels kept (§2a) |
+| `scripts/levels_from_csv.py` | measured levels from your own per-member measurements in a CSV (§2d) |
 | `scripts/measure_images.py` | measure a folder of frames; pick evenly spaced intermediates per tuple (§2e) |
 | `scripts/slider_sweep.py` | linearity and side-effect sweep on Turbo (§4) |
 | `scripts/sweep_grid.py` | make a config's sample previews a sweep grid (in-training sweeps, §4) |
@@ -458,8 +485,8 @@ ln -s /home/csprunger/ai-toolkit/extensions/slider_tuple/comfyui \
 - Scores are identical to `measure_tuples.py` (checked on a real pair). The
   pack loads `body_measure.py` and the Sapiens2 code from this checkout by file
   path (no packages installed into ComfyUI) and reuses
-  `models/sapiens2/sapiens2_1b_matting.safetensors`. `keep_models_loaded`
-  holds the ~3 GB of measure models between runs.
+  `models/sapiens2/sapiens2_1b_matting.safetensors`. The measure models are
+  registered with ComfyUI's model management, which loads and offloads them.
 
 ### Code layout
 

@@ -16,7 +16,7 @@ leaves it).
 Usage (from the repo root):
     .venv/bin/python extensions/slider_tuple/scripts/sweep_grid.py CONFIG.yaml \\
         --prompts datasets/weight_slider_tuples/held_out.jsonl
-    # defaults: --seeds 1000,1001,1002 --multipliers 0,1,2,3,-1,-2,-3 (the sweeps so far)
+    # --max-prompts 2 for a large held-out set; defaults: --seeds 1000,1001,1002 --multipliers 0,1,2,3,-1,-2,-3 (the sweeps so far)
 
 Cost on Turbo: about 4 s per 1024x1024 image, so 42 images (2 prompts x 3 seeds x 7)
 ~3 min per sample step; --width 1024 --height 1536 (BigLove's 2:3) costs ~1.5x.
@@ -35,8 +35,9 @@ from extensions.slider_tuple.sweep import grid_samples  # noqa: E402
 
 def read_prompts(path):
     with open(path, encoding="utf-8") as f:
-        if path.endswith(".jsonl"):
-            return [json.loads(line)["caption"] for line in f if line.strip()]
+        if path.endswith(".jsonl"):  # held_out.jsonl ("caption") or an eval prompt file ("prompt", "set")
+            rows = [json.loads(line) for line in f if line.strip()]
+            return [row["prompt"] if "prompt" in row else row["caption"] for row in rows]
         return [line.strip() for line in f if line.strip()]
 
 
@@ -53,7 +54,7 @@ def set_in_block(text: str, block: str, key: str, value: str) -> str:
         if line.strip() and len(line) - len(line.lstrip()) <= indent:
             break
         if re.match(rf"^{key_indent}{key}:", line):
-            comment = line[line.index("#"):] if "#" in line else ""
+            comment = line[line.index("#"):] if "#" in line and "#" not in value else ""
             lines[i] = f"{key_indent}{key}: {value}" + (f" {comment}" if comment else "")
             return "\n".join(lines)
     lines.insert(start + 1, f"{key_indent}{key}: {value}")
@@ -72,9 +73,12 @@ def set_grid(text: str, samples, width=None, height=None) -> str:
     block = lines[start + 1:end]
     key_indent = " " * (indent + 2)
 
-    # drop the existing prompts / samples list
+    # drop the existing prompts / samples list (and this script's comment above it)
+    grid_comment = f"{key_indent}# sweep grid (sweep_grid.py): prompt x seed x multiplier"
     out, skipping = [], False
     for line in block:
+        if line == grid_comment:
+            continue
         stripped = line.strip()
         depth = len(line) - len(line.lstrip())
         if re.match(rf"^{key_indent}(prompts|samples):", line):
@@ -99,8 +103,7 @@ def set_grid(text: str, samples, width=None, height=None) -> str:
         set_key("width", str(int(width)))
     if height:
         set_key("height", str(int(height)))
-    grid = [f"{key_indent}# sweep grid (sweep_grid.py): prompt x seed x multiplier",
-            f"{key_indent}samples:"]
+    grid = [grid_comment, f"{key_indent}samples:"]
     grid += [f"{key_indent}  - {{prompt: {json.dumps(s['prompt'])}, seed: {s['seed']}, "
              f"network_multiplier: {s['network_multiplier']}}}" for s in samples]
     while out and not out[-1].strip():
@@ -116,6 +119,7 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("config")
     p.add_argument("--prompts", required=True, help="held_out.jsonl (captions) or a text file, one prompt per line")
+    p.add_argument("--max-prompts", type=int, help="use only the first N prompts (e.g. 2 of a large held-out set)")
     p.add_argument("--seeds", default="1000,1001,1002")
     p.add_argument("--multipliers", default="0,1,2,3,-1,-2,-3")
     p.add_argument("--keep-first-sample", action="store_true", help="keep the step-0 preview round")
@@ -123,7 +127,8 @@ def main(argv=None):
     p.add_argument("--height", type=int)
     p.add_argument("--out", help="write here instead of editing the config in place")
     args = p.parse_args(argv)
-    samples = grid_samples(read_prompts(args.prompts), [int(s) for s in floats(args.seeds)], floats(args.multipliers))
+    prompts = read_prompts(args.prompts)[:args.max_prompts]
+    samples = grid_samples(prompts, [int(s) for s in floats(args.seeds)], floats(args.multipliers))
     with open(args.config, encoding="utf-8") as f:
         text = f.read()
     text = set_grid(text, samples, args.width, args.height)  # before opening for writing: a failed edit must not truncate the config

@@ -196,6 +196,18 @@ class Krea2Model(QwenImageVAEHolderMixin, BaseModel):
         # trained with kv_cache enabled for kv-cached inference (the ComfyUI
         # node / hub pipeline kv_cache toggles) to work properly.
         self.kv_cache = bool(self.model_config.model_kwargs.get("kv_cache", False))
+        # sampling only: "euler" / "vendor" are this pipeline's own (Euler on
+        # the resolution-aware mu grid); ComfyUI ports: sampler "er_sde",
+        # schedulers "simple", "beta" (toolkit/comfy_flow_sampling.py)
+        from toolkit.comfy_flow_sampling import SAMPLERS, SCHEDULERS
+
+        self.sample_sampler = str(self.model_config.model_kwargs.get("sample_sampler", "euler"))
+        self.sample_scheduler = str(self.model_config.model_kwargs.get("sample_scheduler", "vendor"))
+        if self.sample_sampler not in SAMPLERS:
+            raise ValueError(f"model_kwargs.sample_sampler {self.sample_sampler!r}: one of {SAMPLERS}")
+        if self.sample_scheduler not in ("vendor",) + SCHEDULERS:
+            raise ValueError(f"model_kwargs.sample_scheduler {self.sample_scheduler!r}: "
+                             f"one of {('vendor',) + SCHEDULERS}")
 
     @staticmethod
     def get_train_scheduler():
@@ -229,26 +241,49 @@ class Krea2Model(QwenImageVAEHolderMixin, BaseModel):
         flush()
         return transformer
 
+    def _te_path(self) -> str:
+        """model.te_name_or_path, else model_kwargs.text_encoder_path, else the
+        stock Qwen3-VL-4B repo."""
+        return (
+            self.model_config.te_name_or_path
+            or self.model_config.model_kwargs.get("text_encoder_path")
+            or QWEN3_VL_PATH
+        )
+
+    def get_text_embedding_space_version(self) -> str:
+        """A custom text encoder gets its own cache key, so embeddings cached
+        with another encoder are not reused; the stock one keeps the arch key."""
+        te_path = self._te_path()
+        if te_path == QWEN3_VL_PATH:
+            return self.arch
+        return f"{self.arch}:{os.path.basename(te_path.rstrip('/'))}"
+
     def _load_text_encoder(self):
         dtype = self.torch_dtype
-        te_path = self.model_config.model_kwargs.get("text_encoder_path", QWEN3_VL_PATH)
+        te_path = self._te_path()
+        # a single .safetensors file (e.g. a ComfyUI repack or finetune of
+        # Qwen3-VL-4B) brings only weights: config, tokenizer and processor
+        # come from the stock repo
+        single_file = te_path.endswith(".safetensors")
+        source = QWEN3_VL_PATH if single_file else te_path
         self.print_and_status_update(f"Loading Qwen3-VL text encoder from {te_path}")
 
         tokenizer = AutoTokenizer.from_pretrained(
-            te_path, max_length=self.max_text_length, token=HF_TOKEN
+            source, max_length=self.max_text_length, token=HF_TOKEN
         )
         processor = Qwen2TokenizerFast.from_pretrained(
-            te_path, max_length=self.max_text_length, token=HF_TOKEN
+            source, max_length=self.max_text_length, token=HF_TOKEN
         )
         text_encoder = Qwen3VLTextEncoder.load_model(
-            te_path, dtype=dtype, subfolder="", token=HF_TOKEN
+            te_path, dtype=dtype, subfolder="", token=HF_TOKEN,
+            config_path=QWEN3_VL_PATH if single_file else None,
         )
         vl_processor = None
         if self.is_edit:
             # Edit mode: reference images are encoded into the text embeddings,
             # so the vision tower stays. Swap its Conv3d patch_embed for an
             # equivalent GEMM (bf16 Conv3d has no fast cuDNN kernel).
-            vl_processor = AutoProcessor.from_pretrained(te_path, token=HF_TOKEN)
+            vl_processor = AutoProcessor.from_pretrained(source, token=HF_TOKEN)
             patch_qwen_vl_patch_embed(text_encoder)
         else:
             # We only ever encode text, so the vision tower is dead weight -- drop it to
@@ -464,6 +499,8 @@ class Krea2Model(QwenImageVAEHolderMixin, BaseModel):
             latents=gen_config.latents,
             generator=generator,
             ref_latents=ref_latents,
+            sampler=self.sample_sampler,
+            scheduler=self.sample_scheduler,
         )[0]
         return img
 

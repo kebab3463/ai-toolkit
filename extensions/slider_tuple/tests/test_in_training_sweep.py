@@ -51,6 +51,9 @@ def test_sweep_grid_rewrites_a_real_config(tmp_path):
                  "--width", "1024", "--height", "1536"])  # idempotent; sets the preview size
     sample = yaml.safe_load(config.read_text())["config"]["process"][0]["sample"]
     assert len(sample["samples"]) == 2 * 3 and (sample["width"], sample["height"]) == (1024, 1536)
+    script.main([str(config), "--prompts", str(held), "--max-prompts", "1", "--seeds", "7", "--multipliers", "0"])
+    samples = yaml.safe_load(config.read_text())["config"]["process"][0]["sample"]["samples"]
+    assert [s["prompt"] for s in samples] == ['caption "a" with: colons']
 
 
 def mean_red(image):

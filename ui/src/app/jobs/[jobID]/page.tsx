@@ -2,7 +2,7 @@
 
 import { useState, use } from 'react';
 import { FaChevronLeft } from 'react-icons/fa';
-import { MdDashboard, MdImage, MdShowChart, MdCode, MdExtension, MdNotes } from 'react-icons/md';
+import { MdDashboard, MdImage, MdShowChart, MdCode, MdExtension, MdNotes, MdTableChart } from 'react-icons/md';
 import { Button } from '@headlessui/react';
 import { TopBar, MainContent } from '@/components/layout';
 import useJob from '@/hooks/useJob';
@@ -15,10 +15,11 @@ import JobConfigViewer from '@/components/JobConfigViewer';
 import JobLossGraph from '@/components/JobLossGraph';
 import JobPlugin from '@/components/JobPlugin';
 import JobNotes from '@/components/JobNotes';
+import JobValidation from '@/components/JobValidation';
 import { Job } from '@prisma/client';
 import { apiClient } from '@/utils/api';
 
-type PageKey = 'overview' | 'samples' | 'config' | 'loss_log' | 'notes' | 'plugin';
+type PageKey = 'overview' | 'samples' | 'config' | 'loss_log' | 'validation' | 'notes' | 'plugin';
 
 interface Page {
   name: string;
@@ -56,6 +57,14 @@ const pages: Page[] = [
     jobTypes: ['train'],
   },
   {
+    name: 'Validation',
+    value: 'validation',
+    icon: MdTableChart,
+    component: JobValidation,
+    mainCss: 'pt-24 pb-4',
+    jobTypes: ['train'],
+  },
+  {
     name: 'Config File',
     value: 'config',
     icon: MdCode,
@@ -84,6 +93,7 @@ export default function JobPage({ params }: { params: { jobID: string } }) {
   const { job, status, refreshJob } = useJob(jobID, 5000);
   const [pageKey, setPageKey] = useState<PageKey>('overview');
   const [hasPlugin, setHasPlugin] = useState(false);
+  const [hasValidation, setHasValidation] = useState(false);
 
   // poll for plugin.html in the job folder; show the Plugin tab if it exists
   usePollLoop(
@@ -94,6 +104,18 @@ export default function JobPage({ params }: { params: { jobID: string } }) {
         .then(data => setHasPlugin(!!data.exists))
         .catch(() => {}),
     5000,
+    [jobID],
+  );
+
+  // show the Validation tab once the run has loss-validation results
+  usePollLoop(
+    () =>
+      apiClient
+        .get(`/api/jobs/${jobID}/validation?check=1`)
+        .then(res => res.data)
+        .then(data => setHasValidation(!!data.exists))
+        .catch(() => {}),
+    10000,
     [jobID],
   );
 
@@ -152,6 +174,9 @@ export default function JobPage({ params }: { params: { jobID: string } }) {
             return null;
           }
           if (page.value === 'plugin' && !hasPlugin) {
+            return null;
+          }
+          if (page.value === 'validation' && !hasValidation) {
             return null;
           }
           return (

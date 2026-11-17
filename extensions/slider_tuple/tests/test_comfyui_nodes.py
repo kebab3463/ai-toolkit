@@ -32,22 +32,22 @@ def test_edit_strength_verdicts():
     nodes = load_nodes()
     node = nodes.SliderEditStrength()
     # torso 80 px: reference width 64 -> 0.8; edits 48 (0.6), 60 (0.75), 70 (0.875)
-    change, rel, ok, verdict, preview = node.run(batch(64), batch(48, 60, 70), "thinner", 0.08, 1.0, True, models=STUB)
+    change, rel, ok, verdict, preview = node.run(batch(64), batch(48, 60, 70), "thinner", 0.08, 1.0, models=STUB)
     assert change == pytest.approx(-0.2) and rel == pytest.approx(-0.25) and ok
     lines = verdict.splitlines()
     assert lines[0].startswith("[0] OK") and "TOO WEAK" in lines[1] and "WRONG DIRECTION" in lines[2]
     assert preview.shape[0] == 3 and preview.shape[-1] == 3 and float(preview.max()) <= 1.0
     with pytest.raises(ValueError, match="reference batch"):
-        node.run(batch(64, 64), batch(48, 60, 70), "thinner", 0.08, 1.0, True, models=STUB)
+        node.run(batch(64, 64), batch(48, 60, 70), "thinner", 0.08, 1.0, models=STUB)
 
 
 def test_unmeasurable_and_body_width():
     nodes = load_nodes()
     blank = torch.zeros(1, 240, 200, 3)
     no_person = (STUB[0], lambda img: None)
-    _, _, ok, verdict, _ = nodes.SliderEditStrength().run(blank, blank, "thinner", 0.08, 1.0, True, models=no_person)
+    _, _, ok, verdict, _ = nodes.SliderEditStrength().run(blank, blank, "thinner", 0.08, 1.0, models=no_person)
     assert not ok and verdict.startswith("[0] UNMEASURABLE")
-    score, report, preview = nodes.SliderBodyWidth().run(batch(48, 64), 1.0, True, models=STUB)
+    score, report, preview = nodes.SliderBodyWidth().run(batch(48, 64), 1.0, models=STUB)
     assert score == pytest.approx(0.6) and report.splitlines()[1] == "[1] 0.8000"
 
 

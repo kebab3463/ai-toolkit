@@ -19,13 +19,13 @@ from .centering import TuplePlan, centered_scales, plan_tuples, sample_members, 
 from .symmetry import symmetry_loss
 from .scales import SliderDatasetOptions, apply_slider_scales, slider_options_by_config
 from .tuples import SliderTrainConfig, load_tuple_dataset, write_anchor_dataset
-from .turbo import TurboPreview
+from .turbo import TurboPreview, TurboSampleMixin
 
 # guidance types handled here; every other guidance_type goes to upstream unchanged
 SLIDER_GUIDANCE_TYPES = ("slider_tuple",)
 
 
-class SliderTupleTrainer(DiffusionTrainer):
+class SliderTupleTrainer(TurboSampleMixin, DiffusionTrainer):
     """SDTrainer with tuple-based image slider losses.
 
     Built on DiffusionTrainer (SDTrainer + the web UI's job status: progress,
@@ -38,7 +38,10 @@ class SliderTupleTrainer(DiffusionTrainer):
     Dataset keys (all default off): ``slider_scales``, ``slider_scale_normalize``
     (scales.py); ``slider_tuples`` with ``guidance_type: slider_tuple``
     (tuples.py). Process-level ``slider:`` block: see tuples.SliderTrainConfig.
+    Samples render on Turbo when slider.turbo_preview is set (TurboSampleMixin).
     """
+
+    turbo_preview_folder = "slider_tuple"
 
     def __init__(self, process_id: int, job, config, **kwargs):
         super().__init__(process_id, job, config, **kwargs)
@@ -60,38 +63,17 @@ class SliderTupleTrainer(DiffusionTrainer):
             self.slider_anchor_pool = load_anchor_pool(
                 slider_config.anchor_prompts, slider_config.anchor_images, slider_config.anchor_caption_key)
         self.slider_anchor_latents = MemberLatentCache()
-        self.slider_turbo: Optional[TurboPreview] = None
+        self.turbo_preview: Optional[TurboPreview] = None
         if slider_config.turbo_preview:
             if not os.path.isfile(slider_config.turbo_preview):
                 raise ValueError(f"slider.turbo_preview: file not found: {slider_config.turbo_preview}")
-            self.slider_turbo = TurboPreview(
+            self.turbo_preview = TurboPreview(
                 slider_config.turbo_preview,
                 steps=slider_config.turbo_preview_steps,
                 cfg=slider_config.turbo_preview_cfg,
                 mu=slider_config.turbo_preview_mu,
                 offload_raw=slider_config.turbo_preview_offload,
             )
-
-    def sample(self, step=None, is_first=False):
-        """Upstream sampling, rendered on the Turbo DiT when slider.turbo_preview is set."""
-        if self.slider_turbo is None:
-            return super().sample(step, is_first)
-        original = self.sd.generate_images
-        lora_path = os.path.join(self.save_root, "slider_tuple", "turbo_preview_lora.safetensors")
-
-        def turbo_generate(configs, sampler=None, **kwargs):
-            print_acc(f"slider_tuple: Turbo preview ({len(configs)} images, {self.slider_turbo.steps} steps)")
-            self.slider_turbo.generate(
-                self.sd, configs, sampler,
-                save_lora=lambda path: self.network.save_weights(path, dtype=torch.float32),
-                lora_path=lora_path, generate_images=original,
-            )
-
-        self.sd.generate_images = turbo_generate
-        try:
-            return super().sample(step, is_first)
-        finally:
-            del self.sd.generate_images
 
     def setup_tuple_datasets(self):
         tuple_sets = []

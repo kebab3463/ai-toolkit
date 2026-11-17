@@ -124,6 +124,17 @@ class MossImageModel(BaseModel):
         kw = self.model_config.model_kwargs
         self.max_text_length = int(kw.get("max_text_length", MAX_TEXT_TOKENS))
         self.sample_shift = float(kw.get("sample_shift", DEFAULT_SHIFT))
+        # sampling only: "euler" / "vendor" are the vendor pipeline's; ComfyUI
+        # ports: sampler "er_sde", schedulers "simple", "beta"
+        self.sample_sampler = str(kw.get("sample_sampler", "euler"))
+        self.sample_scheduler = str(kw.get("sample_scheduler", "vendor"))
+        from toolkit.comfy_flow_sampling import SAMPLERS, SCHEDULERS
+
+        if self.sample_sampler not in SAMPLERS:
+            raise ValueError(f"model_kwargs.sample_sampler {self.sample_sampler!r}: one of {SAMPLERS}")
+        if self.sample_scheduler not in ("vendor",) + SCHEDULERS:
+            raise ValueError(f"model_kwargs.sample_scheduler {self.sample_scheduler!r}: "
+                             f"one of {('vendor',) + SCHEDULERS}")
         self.uncond_skip_layers = tuple(
             kw.get("uncond_skip_layers", DEFAULT_UNCOND_SKIP_LAYERS) or ()
         )
@@ -136,6 +147,17 @@ class MossImageModel(BaseModel):
 
     def get_bucket_divisibility(self):
         return 16  # f8 conv + 2x2 packing
+
+    def get_text_embedding_space_version(self) -> str:
+        """A custom text encoder gets its own cache key, so embeddings cached
+        with another encoder are not reused. The default keeps the plain arch
+        key (existing caches stay valid)."""
+        te_path = self.model_config.te_name_or_path or self.model_config.model_kwargs.get(
+            "text_encoder_path"
+        )
+        if te_path in (None, QWEN35_9B_REPO):
+            return self.arch
+        return f"{self.arch}:{os.path.basename(te_path.rstrip('/'))}"
 
     # ------------------------------------------------------------------
     # Loading
@@ -305,6 +327,8 @@ class MossImageModel(BaseModel):
             generator=generator,
             shift=self.sample_shift,
             uncond_skip_layers=self.uncond_skip_layers,
+            sampler=self.sample_sampler,
+            scheduler=self.sample_scheduler,
         )
         return result[0]
 

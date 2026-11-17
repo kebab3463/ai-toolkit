@@ -68,7 +68,8 @@ def parse_args(argv=None):
                                             "checkpoints) render with one model load into <out>/<file stem>/; "
                                             "omit to sweep the base model only")
     p.add_argument("--zero-lora", action="store_true", help="zero every LoRA delta after loading (acceptance check)")
-    p.add_argument("--prompts", required=True, help="text file, one prompt per line, or a tuples.jsonl (captions)")
+    p.add_argument("--prompts", required=True, help="text file, one prompt per line, or a JSONL (captions or prompts)")
+    p.add_argument("--trigger", help="replaces [trigger] in the prompts (the run's trigger_word)")
     p.add_argument("--seeds", default="1000,1001,1002")
     p.add_argument("--multipliers", default=",".join(str(m) for m in DEFAULT_MULTIPLIERS))
     p.add_argument("--diagnostic", default=",".join(str(m) for m in DEFAULT_DIAGNOSTIC))
@@ -102,12 +103,20 @@ def parse_args(argv=None):
     return args
 
 
-def read_prompts(path):
-    if path.endswith(".jsonl"):
-        with open(path, encoding="utf-8") as f:
-            return [json.loads(line)["caption"] for line in f if line.strip()]
+def read_prompts(path, trigger=None):
+    """Prompts from a text file (one per line) or a JSONL: tuples.jsonl / held_out.jsonl
+    ("caption") or an eval prompt file ("prompt"). [trigger] is replaced by ``trigger``."""
     with open(path, encoding="utf-8") as f:
-        return [line.strip() for line in f if line.strip()]
+        if path.endswith(".jsonl"):
+            rows = [json.loads(line) for line in f if line.strip()]
+            prompts = [row["prompt"] if "prompt" in row else row["caption"] for row in rows]
+        else:
+            prompts = [line.strip() for line in f if line.strip()]
+    if any("[trigger]" in p for p in prompts):
+        if not trigger:
+            raise SystemExit(f"{path}: prompts contain [trigger]; pass --trigger (the run's trigger_word)")
+        prompts = [p.replace("[trigger]", trigger) for p in prompts]
+    return prompts
 
 
 def image_path(out, prompt_idx, seed, m):
@@ -122,14 +131,36 @@ def sweep_jobs(args):
     return [(path, os.path.join(args.out, os.path.splitext(os.path.basename(path))[0])) for path in loras]
 
 
+def load_turbo(model, mu, qtype="convrot8", device="cuda:0"):
+    """A Krea 2 model holder for sampling: ``model`` is a model folder / repo id or a
+    single-file DiT (e.g. a ComfyUI int8_convrot Turbo); ``mu`` the fixed schedule
+    shift (None: resolution-dependent); ``qtype`` 'none' for bf16."""
+    from extensions.slider_tuple.turbo import is_comfy_quantized, load_krea2_dit
+    from toolkit.config_modules import ModelConfig
+    from toolkit.util.get_model import get_model_class
+
+    model_kwargs = {} if mu is None else {"schedule_mu": mu}
+    quantize = qtype != "none"
+    model_config = ModelConfig(
+        name_or_path=model, arch="krea2", dtype="bf16", model_kwargs=model_kwargs,
+        quantize=quantize, qtype=qtype if quantize else "qfloat8", quantize_te=True, qtype_te="qfloat8",
+    )
+    model_class = get_model_class(model_config)
+    sd = model_class(device=device, model_config=model_config, dtype="bf16",
+                     noise_scheduler=model_class.get_train_scheduler())
+    if is_comfy_quantized(model):
+        # e.g. a ComfyUI int8_convrot Turbo: strip its key prefix, keep the layers pre-quantized
+        sd._load_transformer = lambda: load_krea2_dit(model, sd.torch_dtype)
+    sd.load_model()
+    return sd
+
+
 def render(args, prompts, seeds, multipliers, jobs=None):
     """Render every missing image, loading the model once for all jobs; returns {output folder: rows}."""
     import torch
 
-    from extensions.slider_tuple.turbo import is_comfy_quantized, load_krea2_dit
-    from toolkit.config_modules import GenerateImageConfig, ModelConfig
+    from toolkit.config_modules import GenerateImageConfig
     from toolkit.inference_lora import InferenceLoRA
-    from toolkit.util.get_model import get_model_class
 
     jobs = jobs or sweep_jobs(args)
     rows = {out: [SweepRow(prompt_idx=i, prompt=p, seed=s, m=m, path=image_path(out, i, s, m))
@@ -140,19 +171,7 @@ def render(args, prompts, seeds, multipliers, jobs=None):
     if not any(todo.values()):
         return rows
 
-    model_kwargs = {} if args.mu is None else {"schedule_mu": args.mu}
-    quantize = args.qtype != "none"
-    model_config = ModelConfig(
-        name_or_path=args.model, arch="krea2", dtype="bf16", model_kwargs=model_kwargs,
-        quantize=quantize, qtype=args.qtype if quantize else "qfloat8", quantize_te=True, qtype_te="qfloat8",
-    )
-    model_class = get_model_class(model_config)
-    sd = model_class(device=args.device, model_config=model_config, dtype="bf16",
-                     noise_scheduler=model_class.get_train_scheduler())
-    if is_comfy_quantized(args.model):
-        # e.g. a ComfyUI int8_convrot Turbo: strip its key prefix, keep the layers pre-quantized
-        sd._load_transformer = lambda: load_krea2_dit(args.model, sd.torch_dtype)
-    sd.load_model()
+    sd = load_turbo(args.model, args.mu, args.qtype, args.device)
 
     for lora_path, out in jobs:
         if not todo[out]:
@@ -291,7 +310,7 @@ def write_outputs(args, out, rows, n_prompts):
 
 def main():
     args = parse_args()
-    prompts = read_prompts(args.prompts)
+    prompts = read_prompts(args.prompts, args.trigger)
     seeds = [int(s) for s in floats(args.seeds)]
     multipliers = sorted(set(floats(args.multipliers) + floats(args.diagnostic)))
     if 0.0 not in multipliers:

@@ -296,10 +296,15 @@ def import_comfy_quantized_layers(
         elif fmt == "int8_tensorwise":
             rot = int(conf.get("convrot_groupsize", 256)) if conf.get("convrot") else 1
             quantizer = get_ostris_quantizer("convrot8")
+            # a per-tensor scale (one scalar) becomes the per-row scales the
+            # int8 matmul indexes; left as one value, the CUDA path is wrong
+            scales = weight_scale.detach().float().reshape(-1)
+            if scales.numel() == 1:
+                scales = scales.expand(weight.shape[0])
             module.register_buffer("cr8_qdata", weight.contiguous(), persistent=False)
             module.register_buffer(
                 "cr8_scales",
-                weight_scale.detach().float().reshape(-1).contiguous().view(torch.uint8),
+                scales.contiguous().view(torch.uint8),
                 persistent=False,
             )
             module.cr8_rot_size = rot
