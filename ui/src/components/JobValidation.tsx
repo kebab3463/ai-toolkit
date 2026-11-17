@@ -151,6 +151,7 @@ export default function JobValidation({ job }: { job: Job }) {
   const [noiseIndex, setNoiseIndex] = useState(0);
   const [trainPoints, setTrainPoints] = useState<{ step: number; value: number }[]>([]);
   const trainSinceRef = useRef<number | null>(null);
+  const [trainKey, setTrainKey] = useState<string | null>(null);
   // checkpoint table: stays scrolled to the newest step unless the user scrolled up
   const ckptScrollRef = useRef<HTMLDivElement | null>(null);
   const ckptPinnedRef = useRef(true);
@@ -169,7 +170,9 @@ export default function JobValidation({ job }: { job: Job }) {
   );
 
   // training loss (loss_log.db), fetched incrementally, for the chart's per-interval averages.
-  // The loss route returns every key at once: {keys, series: {key: {steps, values}}}
+  // The loss route returns every key at once: {keys, series: {key: {steps, values}}}.
+  // With DOP (or blank-prompt preservation) the trainer also logs loss/normal, the loss
+  // without the preservation term: the same kind of loss as validation, so it wins.
   usePollLoop(
     async () => {
       try {
@@ -177,7 +180,8 @@ export default function JobValidation({ job }: { job: Job }) {
         if (trainSinceRef.current !== null) params.since_step = trainSinceRef.current;
         const res = await apiClient.get(`/api/jobs/${job.id}/loss`, { params });
         const keys: string[] = res.data?.keys ?? [];
-        const k = keys.includes('loss/loss') ? 'loss/loss' : keys.includes('loss') ? 'loss' : null;
+        const k = ['loss/normal', 'loss/loss', 'loss'].find(c => keys.includes(c)) ?? null;
+        if (k !== trainKey) setTrainKey(k);
         const ser = k ? res.data?.series?.[k] : null;
         if (!ser) return;
         const last = trainSinceRef.current;
@@ -571,7 +575,8 @@ export default function JobValidation({ job }: { job: Job }) {
           <h3 className="text-gray-100 text-sm font-medium">Averages across steps</h3>
           {hasTrain && (
             <span className="text-xs text-gray-400">
-              Right axis: training loss, averaged over the steps since the previous validation.
+              Right axis: training loss{trainKey === 'loss/normal' ? ' without the preservation term' : ''},
+              averaged over the steps since the previous validation.
             </span>
           )}
           <NoiseStepper
